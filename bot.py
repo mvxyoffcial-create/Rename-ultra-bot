@@ -2,7 +2,6 @@ import os
 import sys
 import time
 import math
-import async_timeout
 import random
 import string
 import asyncio
@@ -117,7 +116,7 @@ HELP_TXT = """
 • ᴄᴏᴍᴘʀᴇssɪᴏɴ
 
 <b>ℹ️ ᴏᴛʜᴇʀ ᴄᴏᴍᴍᴀɴᴅs:</b>
-/info - ʏᴏᴜʀ ᴅᴇᴛᴀɪʟs ᴡɪᴛʜ ᴘʀᴏғɪʟᴇ ᴘʜᴏᴛᴏ
+/info - ʏᴏᴜʀ ᴅᴇᴛᴀɪʟs ᴡɪᴛʜ ᴘᴏғɪʟᴇ ᴘʜᴏᴛᴏ
 /settings - ᴠɪᴇᴡ ʏᴏᴜʀ ᴄᴜʀʀᴇɴᴛ sᴇᴛᴛɪɴɢs
 /ping - ᴄʜᴇᴄᴋ ʙᴏᴛ ʀᴇsᴘᴏɴsᴇ ᴛɪᴍᴇ
 /about - ʙᴏᴛ ɪɴғᴏʀᴍᴀᴛɪᴏɴ
@@ -126,7 +125,7 @@ HELP_TXT = """
 /stats - ʙᴏᴛ sᴛᴀᴛɪsᴛɪᴄs
 /broadcast - ᴍᴇssᴀɢᴇ ᴀʟʟ ᴜsᴇʀs
 /ban - ʙᴀɴ ᴀ ᴜsᴇʀ
-/unban - ᴜɴʙᴀɴ ᴀ ᴜsᴇR
+/unban - ᴜɴʙᴀɴ ᴀ ᴜsᴇʀ
 """
 
 ABOUT_TXT = """
@@ -136,7 +135,7 @@ ABOUT_TXT = """
 
 ├⍟ Dᴇᴠᴇʟᴏᴘᴇʀ : <a href='https://t.me/Venuboyy'>ᴠᴇɴᴜʙᴏʏʏ</a> 👨‍💻
 
-├⍟ OᴡɴᴇR : <a href='https://t.me/Venuboyy'>ᴠᴇɴᴜʙᴏʏʏ</a> 👑
+├⍟ Oᴡɴᴇʀ : <a href='https://t.me/Venuboyy'>ᴠᴇɴᴜʙᴏʏʏ</a> 👑
 
 ├⍟ Lɪʙʀᴀʀʏ : <a href='https://github.com/pyrogram/pyrogram'>ᴘʏʀᴏɢʀᴀᴍ ᴠ2</a> 📚
 
@@ -144,7 +143,7 @@ ABOUT_TXT = """
 
 ├⍟ Dᴀᴛᴀʙᴀsᴇ : <a href='https://www.mongodb.com/'>ᴍᴏɴɢᴏ ᴅʙ</a> 🍃
 
-├⍟ Sᴇʀᴠᴇʀ : ᴅᴇᴅɪᴄᴀᴛᴇᴅ ᴠᴘs ☁️
+├⍟ SᴇʀᴠᴇR : ᴅᴇᴅɪᴄᴀᴛᴇᴅ ᴠᴘs ☁️
 
 ├⍟ Fᴇᴀᴛᴜʀᴇ : ғɪʟᴇ ʀᴇɴᴀᴍᴇʀ 📝
 
@@ -154,8 +153,6 @@ ABOUT_TXT = """
 
 ╰───────────────⍟</b>
 """
-
-# Dynamic Functions & Helper Tools
 
 def humanbytes(size):
     if not size:
@@ -232,7 +229,7 @@ async def is_banned(user_id):
     user = await get_user(user_id)
     return user.get("banned", False)
 
-# Dynamic Koyeb Health-Check HTTP Endpoint
+# Koyeb Health-Check HTTP Endpoint
 async def handle_koyeb_healthcheck(request):
     return web.Response(text="Bot running cleanly!", status=200)
 
@@ -248,7 +245,7 @@ async def start_web_server():
 # Progress Bar Engine
 async def progress_for_pyrogram(current, total, ud_type, message, start, task_id):
     if task_id in CANCEL_TASKS:
-        client.stop_transmission()
+        bot.stop_transmission()
         return
 
     now = time.time()
@@ -261,23 +258,17 @@ async def progress_for_pyrogram(current, total, ud_type, message, start, task_id
         speed = current / diff
         elapsed_time = round(diff) * 1000
         time_to_completion = round((total - current) / speed) * 1000
-        estimated_total_time = elapsed_time + time_to_completion
 
         elapsed_time = time_formatter(elapsed_time)
-        estimated_total_time = time_formatter(estimated_total_time)
 
         progress = "[{0}{1}]".format(
             ''.join(["█" for _ in range(math.floor(percentage / 5))]),
             ''.join(["░" for _ in range(20 - math.floor(percentage / 5))])
         )
 
-        filename = "Processing_File"
-        if len(filename) > 30:
-            filename = filename[:27] + "..."
-
         tmp = (
             f"╔════════════════════════════════════╗\n"
-            f"║ 📁 {filename}\n"
+            f"║ 📁 {ud_type}\n"
             f"║\n"
             f"║ {progress} {round(percentage, 2)}%\n"
             f"║\n"
@@ -311,22 +302,17 @@ def get_main_menu_keyboard():
         [InlineKeyboardButton("📊 Stats", callback_data="btn_stats"), InlineKeyboardButton("🔧 Help", callback_data="btn_help")]
     ])
 
-# Telegram Bot Handler Implementation
-
 @bot.on_message(filters.command("start"))
 async def start_cmd(client: Client, message: Message):
     user_id = message.from_user.id
     
-    # 1. Force Sub Check
     is_joined, markup = await check_force_sub(client, user_id)
     if not is_joined:
         return await message.reply("⚠️ You must join our channels to use this bot!", reply_markup=markup)
         
-    # 2. Ban Check
     if await is_banned(user_id):
         return await message.reply("⚠️ You have been banned from using this bot!")
         
-    # 3. Database Sync
     await get_user(user_id)
     await update_user(user_id, {
         "first_name": message.from_user.first_name,
@@ -335,7 +321,6 @@ async def start_cmd(client: Client, message: Message):
         "last_active": datetime.now()
     })
 
-    # 4. Sticker Sequence
     try:
         stk = await message.reply_sticker(WELCOME_STICKER)
         await asyncio.sleep(2)
@@ -343,7 +328,6 @@ async def start_cmd(client: Client, message: Message):
     except Exception:
         pass
 
-    # 5. Welcome Photo Dispatch
     welcome_img = f"{random.choice(PICS_URL)}?r={get_random_mix_id()}"
     caption = START_TXT.format(message.from_user.mention)
     
@@ -593,8 +577,7 @@ async def ping_cmd(client: Client, message: Message):
         [InlineKeyboardButton("🔄 Refresh", callback_data="refresh_ping"), InlineKeyboardButton("🏠 Home", callback_data="home_menu")]
     ]))
 
-# Admin Functionality Implementation
-
+# Admin Handlers
 @bot.on_message(filters.command("stats") & filters.user(config.ADMIN_IDS))
 async def stats_cmd(client: Client, message: Message):
     total_users = await users_col.count_documents({})
@@ -640,13 +623,12 @@ async def broadcast_cmd(client: Client, message: Message):
     target_msg = message.reply_to_message
     total_users = await users_col.count_documents({})
     
-    confirm_msg = await message.reply(
+    await message.reply(
         f"📨 <b>Broadcast Preview Ready.</b>\nSend to {total_users} users?",
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("✅ Send", callback_data="confirm_bc"), InlineKeyboardButton("❌ Cancel", callback_data="cancel_bc")]
         ])
     )
-    # Store target message info temporarily
     PENDING_INPUTS[f"bc_msg_{message.from_user.id}"] = target_msg
 
 @bot.on_message(filters.command("ban") & filters.user(config.ADMIN_IDS))
@@ -659,8 +641,8 @@ async def ban_cmd(client: Client, message: Message):
             await client.send_message(target_id, "⚠️ <b>You have been banned from using this bot!</b>")
         except Exception:
             pass
-    except Exception as e:
-        await message.reply(f"<b>Error:</b> Provide a valid user ID.\nUsage: <code>/ban 12345678</code>")
+    except Exception:
+        await message.reply("<b>Error:</b> Provide a valid user ID.\nUsage: <code>/ban 12345678</code>")
 
 @bot.on_message(filters.command("unban") & filters.user(config.ADMIN_IDS))
 async def unban_cmd(client: Client, message: Message):
@@ -672,15 +654,14 @@ async def unban_cmd(client: Client, message: Message):
             await client.send_message(target_id, "✅ <b>You have been unbanned! You can use the bot now.</b>")
         except Exception:
             pass
-    except Exception as e:
-        await message.reply(f"<b>Error:</b> Provide a valid user ID.\nUsage: <code>/unban 12345678</code>")
+    except Exception:
+        await message.reply("<b>Error:</b> Provide a valid user ID.\nUsage: <code>/unban 12345678</code>")
 
-# Context Text Inputs Handler
-@bot.on_message(filters.private & filters.text & ~filters.command(["start", "help", "about", "info", "settings", "thumbnail", "delthumbnail", "metadata", "delmetadata", "caption", "delcaption", "prefix", "suffix", "ping", "stats", "broadcast", "ban", "unban"]))
+# Text inputs handler
+@bot.on_message(filters.private & filters.text & ~filters.command(["start", "help", "about", "info", "settings", "thumbnail", "delthumbnail", "metadata", "delmetadata", "caption", "prefix", "suffix", "ping", "stats", "broadcast", "ban", "unban"]))
 async def text_input_handler(client: Client, message: Message):
     user_id = message.from_user.id
     
-    # Check force sub
     is_joined, markup = await check_force_sub(client, user_id)
     if not is_joined:
         return await message.reply("⚠️ You must join our channels to use this bot!", reply_markup=markup)
@@ -709,7 +690,7 @@ async def text_input_handler(client: Client, message: Message):
             await message.reply(f"✅ <b>Metadata set:</b>\n• Title: {title}\n• Artist: {artist}\n• Album: {album}\n• Year: {year}", reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("🗑️ Remove", callback_data="del_meta_cb"), InlineKeyboardButton("🏠 Home", callback_data="home_menu")]
             ]))
-        except Exception as e:
+        except Exception:
             await message.reply("❌ Invalid format! Use: <code>Title | Artist | Album | Year</code>")
 
     elif state == "SET_CAPTION":
@@ -733,7 +714,6 @@ async def text_input_handler(client: Client, message: Message):
             [InlineKeyboardButton("🗑️ Remove", callback_data="set_suffix_cb"), InlineKeyboardButton("🏠 Home", callback_data="home_menu")]
         ]))
 
-# Custom Thumbnail Upload Listener
 @bot.on_message(filters.private & filters.photo)
 async def photo_input_handler(client: Client, message: Message):
     user_id = message.from_user.id
@@ -752,22 +732,18 @@ async def photo_input_handler(client: Client, message: Message):
             [InlineKeyboardButton("🗑️ Remove", callback_data="del_thumb_cb"), InlineKeyboardButton("🏠 Home", callback_data="home_menu")]
         ]))
 
-# File Processing Engine & Rename Core Logic
-
+# File Receiver Command Handler
 @bot.on_message(filters.private & (filters.document | filters.video | filters.audio))
 async def file_receiver_handler(client: Client, message: Message):
     user_id = message.from_user.id
     
-    # 1. Force Sub Check
     is_joined, markup = await check_force_sub(client, user_id)
     if not is_joined:
         return await message.reply("⚠️ You must join our channels to use this bot!", reply_markup=markup)
         
-    # 2. Ban Check
     if await is_banned(user_id):
         return await message.reply("⚠️ You have been banned from using this bot!")
 
-    # Target Media Object Normalization
     media = message.document or message.video or message.audio
     filename = getattr(media, "file_name", "Unknown_File")
     filesize = humanbytes(getattr(media, "file_size", 0))
@@ -796,7 +772,7 @@ Audio: .mp3, .aac, .m4a, .flac, .opus
     ])
     await message.reply(txt, reply_markup=kb, reply_to_message_id=message.id)
 
-# Dynamic Reply-Based Rename Processor
+# File Renamer Processing Implementation
 @bot.on_message(filters.private & filters.reply & ~filters.command(["start", "help", "about", "info", "settings"]))
 async def rename_reply_processor(client: Client, message: Message):
     user_id = message.from_user.id
@@ -811,8 +787,7 @@ async def rename_reply_processor(client: Client, message: Message):
     if not replied or not (replied.document or replied.video or replied.audio or replied.text):
         return
 
-    # Check if replied message is the bot's media prompt
-    if replied.from_user.id == (await client.get_me()).id and "File Received!" in replied.text:
+    if replied.from_user.id == (await client.get_me()).id and "File Received!" in (replied.text or ""):
         original_media_msg = replied.reply_to_message
         if not original_media_msg:
             return await message.reply("❌ Original media file reference not found.")
@@ -820,7 +795,6 @@ async def rename_reply_processor(client: Client, message: Message):
         new_name = message.text.strip()
         u_data = await get_user(user_id)
 
-        # Apply Prefix/Suffix transformations
         prefix = u_data.get("prefix") or ""
         suffix = u_data.get("suffix") or ""
 
@@ -831,14 +805,12 @@ async def rename_reply_processor(client: Client, message: Message):
         task_id = get_random_mix_id()
         status_msg = await message.reply("⚡ <b>Starting file download...</b>")
 
-        media = original_media_msg.document or original_media_msg.video or original_media_msg.audio
         input_path = os.path.join(config.DOWNLOAD_DIR, f"{task_id}_input")
         output_path = os.path.join(config.DOWNLOAD_DIR, new_name)
 
         try:
             start_time = time.time()
             
-            # Download file with auto-retry
             dl_path = None
             for attempt in range(3):
                 try:
@@ -861,7 +833,6 @@ async def rename_reply_processor(client: Client, message: Message):
 
             await status_msg.edit("⚙️ <b>Processing file metadata and transformations...</b>")
 
-            # Execute ffmpeg processing
             async with ffmpeg_semaphore:
                 meta_title = u_data.get("metadata_title")
                 cmd = ["ffmpeg", "-y", "-i", dl_path]
@@ -883,7 +854,6 @@ async def rename_reply_processor(client: Client, message: Message):
                 )
                 await proc.communicate()
 
-            # Prepare Thumbnail
             thumb_path = None
             if u_data.get("thumbnail"):
                 try:
@@ -891,7 +861,6 @@ async def rename_reply_processor(client: Client, message: Message):
                 except Exception:
                     thumb_path = None
 
-            # Prepare Caption
             caption_template = u_data.get("caption")
             if caption_template:
                 caption = caption_template.format(
@@ -904,7 +873,6 @@ async def rename_reply_processor(client: Client, message: Message):
             await status_msg.edit("⚡ <b>Starting file upload...</b>")
             upload_start = time.time()
 
-            # Upload File with auto-retry
             for attempt in range(3):
                 try:
                     await client.send_document(
@@ -928,7 +896,6 @@ async def rename_reply_processor(client: Client, message: Message):
             await status_msg.edit(f"❌ <b>An error occurred:</b> <code>{str(e)}</code>")
 
         finally:
-            # Complete Temp Files Cleanup
             CANCEL_TASKS.discard(task_id)
             for file_target in [input_path, output_path, dl_path, os.path.join(config.DOWNLOAD_DIR, f"{task_id}_thumb.jpg")]:
                 if file_target and os.path.exists(file_target):
@@ -937,14 +904,16 @@ async def rename_reply_processor(client: Client, message: Message):
                     except Exception:
                         pass
 
-# Inline Callback Route Dispatcher
+# Fully Wire Up ALL Inline Keyboard Callback Actions
 
 @bot.on_callback_query()
 async def callback_route_handler(client: Client, query: CallbackQuery):
     user_id = query.from_user.id
     data = query.data
 
-    # Verify Channel Membership Dynamic Callbacks
+    # Always answer queries to keep inline buttons active and operational
+    await query.answer()
+
     if data == "verify_sub":
         is_joined, markup = await check_force_sub(client, user_id)
         if is_joined:
@@ -957,7 +926,6 @@ async def callback_route_handler(client: Client, query: CallbackQuery):
             await query.answer("❌ Please join all channels first!", show_alert=True)
         return
 
-    # Check Force Sub on every action
     is_joined, markup = await check_force_sub(client, user_id)
     if not is_joined:
         return await query.message.reply("⚠️ You must join our channels to use this bot!", reply_markup=markup)
@@ -965,7 +933,7 @@ async def callback_route_handler(client: Client, query: CallbackQuery):
     if await is_banned(user_id):
         return await query.answer("⚠️ You are banned from using this bot!", show_alert=True)
 
-    # Core Navigation Callbacks
+    # Core Navigation & Button Action Routes
     if data == "home_menu":
         welcome_img = f"{random.choice(PICS_URL)}?r={get_random_mix_id()}"
         caption = START_TXT.format(query.from_user.mention)
@@ -977,6 +945,33 @@ async def callback_route_handler(client: Client, query: CallbackQuery):
         except Exception:
             await query.message.edit_text(text=caption, reply_markup=get_main_menu_keyboard())
 
+    elif data in ["btn_rename", "btn_batch"]:
+        await query.message.reply("📝 <b>Send any file or video to begin renaming or batch processing.</b>")
+
+    elif data == "btn_thumb":
+        u_data = await get_user(user_id)
+        status = "✅ Permanent Thumbnail is Set!" if u_data.get("thumbnail") else "❌ No Custom Thumbnail Set."
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🖼️ Set Thumbnail", callback_data="set_thumb_cb"), InlineKeyboardButton("🗑️ Remove", callback_data="del_thumb_cb")],
+            [InlineKeyboardButton("🏠 Back", callback_data="home_menu")]
+        ])
+        await query.message.edit_text(f"<b>🖼️ Custom Thumbnail Manager</b>\n\nStatus: <b>{status}</b>", reply_markup=kb)
+
+    elif data == "btn_meta":
+        PENDING_INPUTS[user_id] = "SET_METADATA"
+        await query.message.reply("📋 <b>Send metadata in format:</b>\n\n<code>Title | Artist | Album | Year</code>")
+
+    elif data == "btn_caption":
+        PENDING_INPUTS[user_id] = "SET_CAPTION"
+        await query.message.reply("✍️ <b>Send custom caption template:</b>")
+
+    elif data == "btn_prefix":
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🏷️ Set Prefix", callback_data="set_prefix_cb"), InlineKeyboardButton("🏷️ Set Suffix", callback_data="set_suffix_cb")],
+            [InlineKeyboardButton("🏠 Back", callback_data="home_menu")]
+        ])
+        await query.message.edit_text("<b>🏷️ Configure Prefix & Suffix Configuration:</b>", reply_markup=kb)
+
     elif data == "btn_help":
         await query.message.edit_text(HELP_TXT, reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("🏠 Back to Home", callback_data="home_menu")]
@@ -987,6 +982,35 @@ async def callback_route_handler(client: Client, query: CallbackQuery):
         await query.message.edit_text(ABOUT_TXT.format(bot_info.first_name), reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("🏠 Back to Home", callback_data="home_menu")]
         ]), disable_web_page_preview=True)
+
+    elif data in ["btn_stats", "refresh_stats"]:
+        total_users = await users_col.count_documents({})
+        banned_count = await users_col.count_documents({"banned": True})
+        cpu_percent = psutil.cpu_percent()
+        ram = psutil.virtual_memory()
+        disk = psutil.disk_usage('/')
+        uptime = time_formatter((time.time() - BOT_START_TIME) * 1000)
+
+        txt = f"""
+<b>📊 ʙᴏᴛ sᴛᴀᴛɪsᴛɪᴄs</b>
+
+<b>👥 Users:</b>
+• Total: {total_users}
+• Banned: {banned_count}
+
+<b>💻 System:</b>
+• CPU: {cpu_percent}%
+• RAM: {humanbytes(ram.used)}/{humanbytes(ram.total)} ({ram.percent}%)
+• Disk: {humanbytes(disk.used)}/{humanbytes(disk.total)} ({disk.percent}%)
+
+<b>⚡ Bot Status:</b>
+• Uptime: {uptime}
+• Workers: 500
+• Database: Connected ✅
+"""
+        await query.message.edit_text(txt, reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔄 Refresh", callback_data="refresh_stats"), InlineKeyboardButton("🏠 Home", callback_data="home_menu")]
+        ]))
 
     elif data == "btn_settings":
         u_data = await get_user(user_id)
@@ -1017,53 +1041,8 @@ async def callback_route_handler(client: Client, query: CallbackQuery):
         ])
         await query.message.edit_text(txt, reply_markup=kb)
 
-    elif data == "set_thumb_cb":
-        PENDING_INPUTS[user_id] = "SET_THUMBNAIL"
-        await query.message.reply("🖼️ <b>Please send the photo you want to set as custom thumbnail.</b>")
-        await query.answer()
-
-    elif data == "del_thumb_cb":
-        await update_user(user_id, {"thumbnail": None})
-        await query.answer("🗑️ Thumbnail removed!", show_alert=True)
-
-    elif data == "set_meta_cb":
-        PENDING_INPUTS[user_id] = "SET_METADATA"
-        await query.message.reply("📋 <b>Send metadata in format:</b>\n\n<code>Title | Artist | Album | Year</code>")
-        await query.answer()
-
-    elif data == "del_meta_cb":
-        await update_user(user_id, {"metadata_title": None, "metadata_artist": None, "metadata_album": None, "metadata_year": None})
-        await query.answer("🗑️ Metadata removed!", show_alert=True)
-
-    elif data == "set_cap_cb":
-        PENDING_INPUTS[user_id] = "SET_CAPTION"
-        await query.message.reply("✍️ <b>Send your permanent caption text:</b>")
-        await query.answer()
-
-    elif data == "del_cap_cb":
-        await update_user(user_id, {"caption": None})
-        await query.answer("🗑️ Caption removed!", show_alert=True)
-
-    elif data == "set_prefix_cb":
-        PENDING_INPUTS[user_id] = "SET_PREFIX"
-        await query.message.reply("🏷️ <b>Send prefix text:</b>")
-        await query.answer()
-
-    elif data == "set_suffix_cb":
-        PENDING_INPUTS[user_id] = "SET_SUFFIX"
-        await query.message.reply("🏷️ <b>Send suffix text:</b>")
-        await query.answer()
-
-    elif data.startswith("cancel_process_"):
-        task_id = data.split("_")[2]
-        CANCEL_TASKS.add(task_id)
-        await query.answer("❌ Cancelling process...", show_alert=True)
-
-    elif data == "cancel_action":
-        await query.message.delete()
-
-    elif data == "btn_media":
-        txt = "<b>🎬 Media Tools</b>\n\nSelect desired media manipulation operation:"
+    elif data in ["btn_media", "btn_ss", "btn_audio", "btn_sub", "btn_compress"]:
+        txt = "<b>🎬 Media Tools Menu</b>\n\nSelect desired operational action:"
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("📤 Stream Extract", callback_data="tool_streamext"), InlineKeyboardButton("🚫 Stream Remove", callback_data="tool_streamrem")],
             [InlineKeyboardButton("🎵 Audio Extract", callback_data="tool_audioext"), InlineKeyboardButton("🔇 Audio Remove", callback_data="tool_audiorem")],
@@ -1071,10 +1050,14 @@ async def callback_route_handler(client: Client, query: CallbackQuery):
             [InlineKeyboardButton("📸 Screenshot", callback_data="tool_ss"), InlineKeyboardButton("✂️ Sample Video", callback_data="tool_sample")],
             [InlineKeyboardButton("🏠 Back", callback_data="home_menu")]
         ])
-        await query.message.edit_text(txt, reply_markup=kb)
+        if query.message.photo:
+            await query.message.delete()
+            await query.message.reply(txt, reply_markup=kb)
+        else:
+            await query.message.edit_text(txt, reply_markup=kb)
 
     elif data == "btn_convert":
-        txt = "<b>🔄 Format Conversion</b>\n\nSelect conversion format target:"
+        txt = "<b>🔄 Format Conversion Menu</b>\n\nSelect target media format:"
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("MP4", callback_data="conv_mp4"), InlineKeyboardButton("MKV", callback_data="conv_mkv"), InlineKeyboardButton("AVI", callback_data="conv_avi")],
             [InlineKeyboardButton("MOV", callback_data="conv_mov"), InlineKeyboardButton("WEBM", callback_data="conv_webm"), InlineKeyboardButton("TS", callback_data="conv_ts")],
@@ -1082,13 +1065,64 @@ async def callback_route_handler(client: Client, query: CallbackQuery):
             [InlineKeyboardButton("FLAC", callback_data="conv_flac"), InlineKeyboardButton("OPUS", callback_data="conv_opus")],
             [InlineKeyboardButton("🏠 Back", callback_data="home_menu")]
         ])
-        await query.message.edit_text(txt, reply_markup=kb)
+        if query.message.photo:
+            await query.message.delete()
+            await query.message.reply(txt, reply_markup=kb)
+        else:
+            await query.message.edit_text(txt, reply_markup=kb)
 
-    # Broadcast Flow Integration
+    # Sub-action Handlers
+    elif data.startswith("tool_") or data.startswith("conv_"):
+        await query.message.reply("📁 <b>Reply to any existing uploaded video or file to perform this selected action.</b>")
+
+    elif data == "set_thumb_cb":
+        PENDING_INPUTS[user_id] = "SET_THUMBNAIL"
+        await query.message.reply("🖼️ <b>Send photo to set as custom permanent thumbnail.</b>")
+
+    elif data == "del_thumb_cb":
+        await update_user(user_id, {"thumbnail": None})
+        await query.answer("🗑️ Thumbnail removed!", show_alert=True)
+
+    elif data == "set_meta_cb":
+        PENDING_INPUTS[user_id] = "SET_METADATA"
+        await query.message.reply("📋 <b>Send metadata format:</b>\n<code>Title | Artist | Album | Year</code>")
+
+    elif data == "del_meta_cb":
+        await update_user(user_id, {"metadata_title": None, "metadata_artist": None, "metadata_album": None, "metadata_year": None})
+        await query.answer("🗑️ Metadata reset!", show_alert=True)
+
+    elif data == "set_cap_cb":
+        PENDING_INPUTS[user_id] = "SET_CAPTION"
+        await query.message.reply("✍️ <b>Send custom caption format:</b>")
+
+    elif data == "del_cap_cb":
+        await update_user(user_id, {"caption": None})
+        await query.answer("🗑️ Caption reset!", show_alert=True)
+
+    elif data == "set_prefix_cb":
+        PENDING_INPUTS[user_id] = "SET_PREFIX"
+        await query.message.reply("🏷️ <b>Send custom prefix:</b>")
+
+    elif data == "set_suffix_cb":
+        PENDING_INPUTS[user_id] = "SET_SUFFIX"
+        await query.message.reply("🏷️ <b>Send custom suffix:</b>")
+
+    elif data.startswith("cancel_process_"):
+        task_id = data.split("_")[2]
+        CANCEL_TASKS.add(task_id)
+        await query.answer("❌ Cancelling operation...", show_alert=True)
+
+    elif data == "cancel_action":
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
+
+    # Admin Broadcast Callback Confirmations
     elif data == "confirm_bc" and user_id in config.ADMIN_IDS:
         target_msg = PENDING_INPUTS.get(f"bc_msg_{user_id}")
         if not target_msg:
-            return await query.message.edit_text("❌ Broadcast reference lost.")
+            return await query.message.edit_text("❌ Broadcast message target missing.")
 
         await query.message.edit_text("📨 <b>Broadcasting message to all users...</b>")
         users = users_col.find({})
@@ -1119,14 +1153,11 @@ async def callback_route_handler(client: Client, query: CallbackQuery):
         PENDING_INPUTS.pop(f"bc_msg_{user_id}", None)
         await query.message.edit_text("❌ Broadcast cancelled.")
 
-# Entry Point Execution Engine
-
+# Core Launch Async Initialization
 async def main():
-    # Start Web Server for Koyeb Port 8000
     await start_web_server()
-    # Start Pyrogram Telegram Client
     await bot.start()
-    logger.info("Bot started successfully!")
+    logger.info("Bot successfully deployed and active!")
     await asyncio.Event().wait()
 
 if __name__ == "__main__":
