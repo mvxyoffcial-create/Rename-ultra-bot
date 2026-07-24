@@ -151,4 +151,4 @@ class Database:
         )
 
 
-db = Database(config.MONGO_URL, config.DB_NAME)
+db = Database(config.MONGO_URI, config.DB_NAME)
