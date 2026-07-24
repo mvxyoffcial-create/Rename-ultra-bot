@@ -16,3 +16,5 @@ PICS_URL = [
 ]
 FALLBACK_PIC = "https://i.ibb.co/pr2H8cwT/img-8312532076.jpg"
 START_STICKER = "CAACAgIAAxkBAAEQZtFpgEdROhGouBVFD3e0K-YjmVHwsgACtCMAAphLKUjeub7NKlvk2TgE"
+
+PORT = int(os.getenv("PORT", 8000))
