@@ -1,11 +1,9 @@
 import os
-import time
 from pyrogram import Client, filters
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
-from database import get_user, create_task
+from database import get_user
 from utils import get_random_mix_id
 
-# Temporary state storage for file workflows
 USER_STATES = {}
 
 def build_tools_markup(selected_actions: dict):
@@ -20,7 +18,10 @@ def build_tools_markup(selected_actions: dict):
         [InlineKeyboardButton(f"{mark('subtitle')} Extract Subtitle 📝", callback_data="tool_toggle_subtitle")],
         [InlineKeyboardButton(f"{mark('screenshot')} Take Screenshot 📸", callback_data="tool_toggle_screenshot")],
         [InlineKeyboardButton(f"{mark('sample')} Sample Video 🎬", callback_data="tool_toggle_sample")],
-        [InlineKeyboardButton("✅ Done", callback_data="tool_action_done")]
+        [
+            InlineKeyboardButton("✅ Done", callback_data="tool_action_done"),
+            InlineKeyboardButton("Close ❌", callback_data="tool_action_close")
+        ]
     ])
 
 @Client.on_message((filters.video | filters.document) & filters.private)
@@ -32,9 +33,8 @@ async def handle_media(client: Client, message: Message):
     if not file:
         return
 
-    # Check 2GB limits for standard users
     if file.file_size > 2 * 1024 * 1024 * 1024 and not user.get("is_premium"):
-        return await message.reply_text("<b>❌ File Size Limit Exceeded!</b>\nFree users can only process files up to 2GB. Upgrade to Premium for 4GB support.")
+        return await message.reply_text("<b>❌ File Size Limit Exceeded!</b>\nFree users can only process files up to 2GB.")
 
     USER_STATES[user_id] = {
         "message": message,
@@ -46,7 +46,7 @@ async def handle_media(client: Client, message: Message):
 
     await message.reply_text(
         f"<b>📁 File Received:</b> <code>{USER_STATES[user_id]['file_name']}</code>\n\n"
-        f"Please send the <b>new name</b> for this file (including extension, e.g. <code>New_Movie.mp4</code>):",
+        f"Please send the <b>new name</b> for this file:",
         reply_to_message_id=message.id
     )
 
@@ -61,12 +61,12 @@ async def handle_new_name(client: Client, message: Message):
     
     user = await get_user(user_id)
     if user["settings"]["video_tools"]:
-        await message.reply_text(
+        msg = await message.reply_text(
             f"<b>✏️ New Name Set:</b> <code>{new_name}</code>\n\nSelect the actions you wish to execute:",
             reply_markup=build_tools_markup(USER_STATES[user_id]["selected_actions"])
         )
+        USER_STATES[user_id]["menu_message_id"] = msg.id
     else:
-        # Direct execution without tools menu
         from handlers.stream import execute_processing
         await execute_processing(client, user_id, message)
 
@@ -84,3 +84,10 @@ async def toggle_tools_cb(client: Client, callback_query: CallbackQuery):
         reply_markup=build_tools_markup(USER_STATES[user_id]["selected_actions"])
     )
     await callback_query.answer()
+
+@Client.on_callback_query(filters.regex("tool_action_close"))
+async def close_menu_cb(client: Client, callback_query: CallbackQuery):
+    user_id = callback_query.from_user.id
+    USER_STATES.pop(user_id, None)
+    await callback_query.message.delete()
+    await callback_query.answer("Cancelled task.")
