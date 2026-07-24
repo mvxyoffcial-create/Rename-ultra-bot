@@ -8,38 +8,43 @@ from ffmpeg_tools import (
     get_media_streams, remove_streams_with_progress, extract_audio_with_progress, 
     take_screenshot, create_sample, extract_stream
 )
-from utils import progress_bar, format_language
+from utils import progress_bar, PROGRESS_CACHE
 from config import Config
 
 STOPPED_TASKS = set()
-PROGRESS_CACHE = {}
+
+def format_language(lang_code: str) -> str:
+    lang_map = {
+        "eng": "English 🇬🇧",
+        "hin": "Hindi 🇮🇳",
+        "tam": "Tamil 🇮🇳",
+        "tel": "Telugu 🇮🇳",
+        "mal": "Malayalam 🇮🇳",
+        "kan": "Kannada 🇮🇳",
+        "jpn": "Japanese 🇯🇵",
+        "und": "Unknown 🌐"
+    }
+    return lang_map.get(lang_code.lower(), lang_code.upper())
 
 def build_remove_menu_markup(streams: list, selected_indices: list):
     buttons = []
-    
-    # Individual Stream Toggle Buttons
     for idx, s in enumerate(streams):
         codec = s.get("codec_name", "unknown")
         stype = s.get("codec_type", "unknown").capitalize()
         lang = format_language(s.get("tags", {}).get("language", "und"))
-        
-        # Mark with ✅ if selected, otherwise ⬜
         mark = "✅" if idx in selected_indices else "⬜"
         btn_text = f"{mark} Stream {idx}: {stype} ({codec}) [{lang}]"
         buttons.append([InlineKeyboardButton(btn_text, callback_data=f"select_rm_{idx}")])
 
-    # Bulk Selection Quick Buttons
     buttons.append([
         InlineKeyboardButton("🎵 All Audio", callback_data="select_rm_all_audio"),
         InlineKeyboardButton("📝 All Subtitles", callback_data="select_rm_all_subs")
     ])
     
-    # Action Control Buttons
     buttons.append([
         InlineKeyboardButton("✅ Confirm & Execute", callback_data="exec_stream_remove"),
         InlineKeyboardButton("Close ❌", callback_data="tool_action_close")
     ])
-    
     return InlineKeyboardMarkup(buttons)
 
 @Client.on_message(filters.regex(r"^/stop_"))
@@ -67,147 +72,6 @@ async def refresh_progress_cb(client: Client, callback_query: CallbackQuery):
     else:
         await callback_query.answer("Progress updated.", show_alert=False)
 
-@Client.on_callback_query(filters.regex("tool_action_done"))
-async def on_done_click(client: Client, callback_query: CallbackQuery):
-    user_id = callback_query.from_user.id
-    if user_id not in USER_STATES:
-        return await callback_query.answer("Task expired!", show_alert=True)
-
-    state = USER_STATES[user_id]
-    actions = state["selected_actions"]
-
-    # 1. Stream Extract Workflow
-    if actions.get("extract"):
-        status_msg = await callback_query.message.edit_text("🔍 Analyzing video & audio streams...")
-        file_msg = state["message"]
-        os.makedirs(Config.DOWNLOAD_DIR, exist_ok=True)
-        temp_path = os.path.join(Config.DOWNLOAD_DIR, f"temp_{user_id}_{state['file_name']}")
-        
-        start_time = time.time()
-        dl_path = await client.download_media(
-            message=file_msg,
-            file_name=temp_path,
-            progress=progress_bar,
-            progress_args=("Downloading for Analysis", status_msg, start_time, state["task_id"], callback_query.from_user)
-        )
-        state["local_path"] = dl_path
-        streams = await get_media_streams(dl_path)
-        
-        buttons = []
-        text = "<b>📤 Stream Extract Menu:</b>\n\nSelect a stream to extract:\n\n"
-        for idx, s in enumerate(streams):
-            codec = s.get("codec_name", "unknown")
-            stype = s.get("codec_type", "unknown").capitalize()
-            lang = format_language(s.get("tags", {}).get("language", "und"))
-            text += f"• <b>Stream {idx}:</b> {stype} ({codec}) - 🌐 <b>{lang}</b>\n"
-            buttons.append([InlineKeyboardButton(f"Extract Stream {idx} ({stype} - {lang})", callback_data=f"exec_extract_{idx}")])
-        
-        buttons.append([InlineKeyboardButton("Close ❌", callback_data="tool_action_close")])
-        return await status_msg.edit_text(text, reply_markup=InlineKeyboardMarkup(buttons))
-
-    # 2. Stream Remove Workflow with Inline Checkmarks & Quick Buttons
-    if actions.get("remove"):
-        status_msg = await callback_query.message.edit_text("🔍 Analyzing video & audio streams...")
-        file_msg = state["message"]
-        os.makedirs(Config.DOWNLOAD_DIR, exist_ok=True)
-        temp_path = os.path.join(Config.DOWNLOAD_DIR, f"temp_{user_id}_{state['file_name']}")
-        
-        start_time = time.time()
-        dl_path = await client.download_media(
-            message=file_msg,
-            file_name=temp_path,
-            progress=progress_bar,
-            progress_args=("Downloading for Analysis", status_msg, start_time, state["task_id"], callback_query.from_user)
-        )
-        state["local_path"] = dl_path
-        streams = await get_media_streams(dl_path)
-        state["available_streams"] = streams
-        state["remove_selected"] = []
-
-        text = "<b>🗑️ Stream Remover Menu:</b>\n\nSelect streams to remove from the video below:"
-        return await status_msg.edit_text(text, reply_markup=build_remove_menu_markup(streams, []))
-
-    await execute_processing(client, user_id, callback_query.message)
-
-@Client.on_callback_query(filters.regex("^select_rm_"))
-async def select_stream_rm(client: Client, callback_query: CallbackQuery):
-    user_id = callback_query.from_user.id
-    if user_id not in USER_STATES:
-        return await callback_query.answer("Task expired!", show_alert=True)
-        
-    state = USER_STATES[user_id]
-    streams = state.get("available_streams", [])
-    sel = state.get("remove_selected", [])
-    action = callback_query.data.replace("select_rm_", "")
-
-    if action == "all_audio":
-        audio_indices = [idx for idx, s in enumerate(streams) if s.get("codec_type") == "audio"]
-        if all(idx in sel for idx in audio_indices):
-            sel = [idx for idx in sel if idx not in audio_indices]
-            await callback_query.answer("Deselected all audio streams.")
-        else:
-            sel = list(set(sel + audio_indices))
-            await callback_query.answer("Selected all audio streams.")
-
-    elif action == "all_subs":
-        sub_indices = [idx for idx, s in enumerate(streams) if s.get("codec_type") in ["subtitle", "subrip"]]
-        if all(idx in sel for idx in sub_indices):
-            sel = [idx for idx in sel if idx not in sub_indices]
-            await callback_query.answer("Deselected all subtitle streams.")
-        else:
-            sel = list(set(sel + sub_indices))
-            await callback_query.answer("Selected all subtitle streams.")
-
-    else:
-        idx = int(action)
-        if idx in sel:
-            sel.remove(idx)
-            await callback_query.answer(f"Removed Stream {idx}")
-        else:
-            sel.append(idx)
-            await callback_query.answer(f"Selected Stream {idx}")
-
-    state["remove_selected"] = sel
-    await callback_query.message.edit_reply_markup(reply_markup=build_remove_menu_markup(streams, sel))
-
-@Client.on_callback_query(filters.regex("exec_stream_remove"))
-async def exec_rm_cb(client: Client, callback_query: CallbackQuery):
-    user_id = callback_query.from_user.id
-    await execute_processing(client, user_id, callback_query.message)
-
-@Client.on_callback_query(filters.regex("^exec_extract_"))
-async def exec_single_extract(client: Client, callback_query: CallbackQuery):
-    user_id = callback_query.from_user.id
-    if user_id not in USER_STATES:
-        return await callback_query.answer("Task expired!", show_alert=True)
-    
-    stream_idx = int(callback_query.data.split("_")[-1])
-    state = USER_STATES[user_id]
-    task_id = state["task_id"].split("_")[-1]
-    
-    status_msg = await callback_query.message.edit_text("Starting stream extraction...")
-    input_path = state["local_path"]
-    ext_out = os.path.join(Config.DOWNLOAD_DIR, f"{os.path.splitext(state['new_name'])[0]}_stream_{stream_idx}.mkv")
-    
-    success = await extract_stream(input_path, ext_out, stream_idx)
-    if success:
-        start_time = time.time()
-        await client.send_document(
-            chat_id=callback_query.message.chat.id,
-            document=ext_out,
-            caption=f"<b>✅ Extracted Stream {stream_idx} File!</b>",
-            progress=progress_bar,
-            progress_args=("Uploading Stream", status_msg, start_time, task_id, callback_query.from_user)
-        )
-    
-    if os.path.exists(ext_out):
-        os.remove(ext_out)
-    if os.path.exists(input_path):
-        os.remove(input_path)
-
-    await status_msg.delete()
-    USER_STATES.pop(user_id, None)
-
 async def execute_processing(client: Client, user_id: int, message: Message):
     if user_id not in USER_STATES:
         return
@@ -215,17 +79,20 @@ async def execute_processing(client: Client, user_id: int, message: Message):
     
     raw_task_id = state["task_id"]
     task_id = raw_task_id.split("_")[-1]
-    
     new_name = state["new_name"]
     file_msg = state["message"]
     
-    status_msg = await message.reply_text("Initializing Task...")
+    status_msg = await message.reply_text("⏳ Initializing Task...")
     os.makedirs(Config.DOWNLOAD_DIR, exist_ok=True)
     local_path = state.get("local_path")
     
-    # 1. Download
+    # Force initial 0% progress display
+    start_time = time.time()
+    file_size = getattr(state["message"].video or state["message"].document, "file_size", 0)
+    await progress_bar(0, file_size, "Download File", status_msg, start_time, task_id, message.from_user, force_update=True)
+
+    # 1. Download File
     if not local_path or not os.path.exists(local_path):
-        start_time = time.time()
         local_path = os.path.join(Config.DOWNLOAD_DIR, f"{raw_task_id}_{state['file_name']}")
         await client.download_media(
             message=file_msg,
@@ -237,7 +104,7 @@ async def execute_processing(client: Client, user_id: int, message: Message):
     output_path = os.path.join(Config.DOWNLOAD_DIR, new_name)
     actions = state.get("selected_actions", {})
 
-    # 2. FFmpeg Engine Processing
+    # 2. FFmpeg Processing
     if actions.get("remove") and state.get("remove_selected"):
         await remove_streams_with_progress(
             local_path, output_path, state["remove_selected"],
@@ -263,7 +130,7 @@ async def execute_processing(client: Client, user_id: int, message: Message):
         if await create_sample(output_path, sample_out):
             outputs_to_upload.append((sample_out, "video"))
 
-    # 3. Clean Upload Delivery
+    # 3. Clean File Delivery
     for file_to_send, media_type in outputs_to_upload:
         if raw_task_id in STOPPED_TASKS or task_id in STOPPED_TASKS:
             await status_msg.edit_text("❌ Task Cancelled by user.")
