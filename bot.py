@@ -345,6 +345,7 @@ def build_caption(filename: str, size: int, user: dict) -> str:
 
 @app.on_message(filters.command("start") & filters.private)
 async def start_cmd(client: Client, message: Message):
+    log.info(f"Received /start from user_id={message.from_user.id} username=@{message.from_user.username}")
     try:
         user = message.from_user
         if await safe_db_call(db.is_banned(user.id), default=False, label="is_banned"):
@@ -1369,6 +1370,11 @@ async def callback_router(client: Client, cq: CallbackQuery):
             await cq.answer(f"Error: {str(e)[:150]}", show_alert=True)
         except Exception:
             pass
+
+
+@app.on_raw_update()
+async def raw_update_logger(client: Client, update, users, chats):
+    log.info(f"RAW UPDATE received: {type(update).__name__}")
 
 
 # ======================================================================= #
