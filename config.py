@@ -12,10 +12,10 @@ class Config:
     DATABASE_NAME = "videobot_db"
     
     OWNER_ID = int(os.environ.get("OWNER_ID", "123456789"))
-    FORCE_SUB_CHANNELS = "spideyoffcail,mvxyoffcail"
+    FORCE_SUB_CHANNELS = ["spideyoffcail", "mvxyoffcail"]
     
-    PORT = "8000"
-    WORKERS = "500"
+    PORT = int(os.environ.get("PORT", "8000"))
+    WORKERS = int(os.environ.get("WORKERS", "500"))
     
     DOWNLOAD_DIR = "./downloads"
     
