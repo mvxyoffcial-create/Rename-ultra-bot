@@ -1,11 +1,27 @@
 import os
 import time
+import asyncio
 from pyrogram import Client, filters
 from pyrogram.types import CallbackQuery, Message, InlineKeyboardMarkup, InlineKeyboardButton
 from handlers.rename import USER_STATES
-from ffmpeg_tools import get_media_streams, remove_streams, extract_audio, take_screenshot, create_sample, extract_stream
+from ffmpeg_tools import (
+    get_media_streams, remove_streams_with_progress, extract_audio_with_progress, 
+    take_screenshot, create_sample, extract_stream
+)
 from utils import progress_bar
 from config import Config
+
+STOPPED_TASKS = set()
+
+@Client.on_message(filters.regex(r"^/stop_"))
+async def stop_task_handler(client: Client, message: Message):
+    task_id = message.text.replace("/stop_", "").strip()
+    STOPPED_TASKS.add(task_id)
+    await message.reply_text(f"🛑 <b>Task {task_id} has been cancellation requested.</b>")
+
+@Client.on_callback_query(filters.regex(r"^refresh_progress_"))
+async def refresh_progress_cb(client: Client, callback_query: CallbackQuery):
+    await callback_query.answer("Progress refreshed!")
 
 @Client.on_callback_query(filters.regex("tool_action_done"))
 async def on_done_click(client: Client, callback_query: CallbackQuery):
@@ -16,9 +32,8 @@ async def on_done_click(client: Client, callback_query: CallbackQuery):
     state = USER_STATES[user_id]
     actions = state["selected_actions"]
 
-    # 1. Handle Stream Extract Workflow
     if actions.get("extract"):
-        status_msg = await callback_query.message.edit_text("🔍 Analyzing video streams for extraction...")
+        status_msg = await callback_query.message.edit_text("🔍 Analyzing video streams...")
         file_msg = state["message"]
         os.makedirs(Config.DOWNLOAD_DIR, exist_ok=True)
         temp_path = os.path.join(Config.DOWNLOAD_DIR, f"temp_{user_id}_{state['file_name']}")
@@ -28,7 +43,7 @@ async def on_done_click(client: Client, callback_query: CallbackQuery):
             message=file_msg,
             file_name=temp_path,
             progress=progress_bar,
-            progress_args=("Downloading for Analysis", status_msg, start_time, state["task_id"], callback_query.from_user)
+            progress_args=("Download", status_msg, start_time, state["task_id"], callback_query.from_user)
         )
         state["local_path"] = dl_path
         streams = await get_media_streams(dl_path)
@@ -45,9 +60,8 @@ async def on_done_click(client: Client, callback_query: CallbackQuery):
         buttons.append([InlineKeyboardButton("Close ❌", callback_data="tool_action_close")])
         return await status_msg.edit_text(text, reply_markup=InlineKeyboardMarkup(buttons))
 
-    # 2. Handle Stream Remove Workflow
     if actions.get("remove"):
-        status_msg = await callback_query.message.edit_text("🔍 Analyzing video streams for removal...")
+        status_msg = await callback_query.message.edit_text("🔍 Analyzing video streams...")
         file_msg = state["message"]
         os.makedirs(Config.DOWNLOAD_DIR, exist_ok=True)
         temp_path = os.path.join(Config.DOWNLOAD_DIR, f"temp_{user_id}_{state['file_name']}")
@@ -57,7 +71,7 @@ async def on_done_click(client: Client, callback_query: CallbackQuery):
             message=file_msg,
             file_name=temp_path,
             progress=progress_bar,
-            progress_args=("Downloading for Analysis", status_msg, start_time, state["task_id"], callback_query.from_user)
+            progress_args=("Download", status_msg, start_time, state["task_id"], callback_query.from_user)
         )
         state["local_path"] = dl_path
         streams = await get_media_streams(dl_path)
@@ -86,8 +100,9 @@ async def exec_single_extract(client: Client, callback_query: CallbackQuery):
     
     stream_idx = int(callback_query.data.split("_")[-1])
     state = USER_STATES[user_id]
-    status_msg = await callback_query.message.edit_text(f"⚙️ Extracting Stream {stream_idx}...")
+    task_id = state["task_id"].split("_")[-1]
     
+    status_msg = await callback_query.message.edit_text("Starting...")
     input_path = state["local_path"]
     ext_out = os.path.join(Config.DOWNLOAD_DIR, f"{os.path.splitext(state['new_name'])[0]}_stream_{stream_idx}.mkv")
     
@@ -99,7 +114,7 @@ async def exec_single_extract(client: Client, callback_query: CallbackQuery):
             document=ext_out,
             caption=f"<b>✅ Stream {stream_idx} Extracted Successfully!</b>",
             progress=progress_bar,
-            progress_args=("📤 Uploading Stream", status_msg, start_time, state["task_id"], callback_query.from_user)
+            progress_args=("Upload", status_msg, start_time, task_id, callback_query.from_user)
         )
     
     if os.path.exists(ext_out):
@@ -134,31 +149,39 @@ async def execute_processing(client: Client, user_id: int, message: Message):
     if user_id not in USER_STATES:
         return
     state = USER_STATES[user_id]
-    status_msg = await message.reply_text("⚡ Starting Task Execution...")
     
-    task_id = state["task_id"]
+    # Task ID formatted to match screenshot
+    raw_task_id = state["task_id"]
+    task_id = raw_task_id.split("_")[-1]
+    
     new_name = state["new_name"]
     file_msg = state["message"]
+    
+    status_msg = await message.reply_text("Initializing...")
     
     os.makedirs(Config.DOWNLOAD_DIR, exist_ok=True)
     local_path = state.get("local_path")
     
+    # 1. Download Phase
     if not local_path or not os.path.exists(local_path):
         start_time = time.time()
-        local_path = os.path.join(Config.DOWNLOAD_DIR, f"{task_id}_{state['file_name']}")
+        local_path = os.path.join(Config.DOWNLOAD_DIR, f"{raw_task_id}_{state['file_name']}")
         await client.download_media(
             message=file_msg,
             file_name=local_path,
             progress=progress_bar,
-            progress_args=("📥 Download", status_msg, start_time, task_id, message.from_user)
+            progress_args=("Download", status_msg, start_time, task_id, message.from_user)
         )
 
     output_path = os.path.join(Config.DOWNLOAD_DIR, new_name)
     actions = state.get("selected_actions", {})
 
-    await status_msg.edit_text("⚙️ Processing media with FFmpeg engine...")
+    # 2. Real FFmpeg Processing Phase
     if actions.get("remove") and state.get("remove_selected"):
-        await remove_streams(local_path, output_path, state["remove_selected"])
+        await remove_streams_with_progress(
+            local_path, output_path, state["remove_selected"],
+            progress_bar, status_msg, task_id, message.from_user
+        )
     else:
         os.rename(local_path, output_path)
 
@@ -166,7 +189,7 @@ async def execute_processing(client: Client, user_id: int, message: Message):
 
     if actions.get("audio"):
         audio_out = os.path.join(Config.DOWNLOAD_DIR, f"{os.path.splitext(new_name)[0]}_audio.mp3")
-        if await extract_audio(output_path, audio_out):
+        if await extract_audio_with_progress(output_path, audio_out, progress_bar, status_msg, task_id, message.from_user):
             outputs_to_upload.append((audio_out, "audio"))
 
     if actions.get("screenshot"):
@@ -179,7 +202,12 @@ async def execute_processing(client: Client, user_id: int, message: Message):
         if await create_sample(output_path, sample_out):
             outputs_to_upload.append((sample_out, "video"))
 
+    # 3. Upload Phase
     for file_to_send, media_type in outputs_to_upload:
+        if raw_task_id in STOPPED_TASKS or task_id in STOPPED_TASKS:
+            await status_msg.edit_text("❌ Task Cancelled by user.")
+            break
+
         start_time = time.time()
         if media_type == "video":
             await client.send_video(
@@ -187,7 +215,7 @@ async def execute_processing(client: Client, user_id: int, message: Message):
                 video=file_to_send,
                 caption=f"<b>✅ Task Completed!</b>\n📄 <b>File:</b> <code>{os.path.basename(file_to_send)}</code>",
                 progress=progress_bar,
-                progress_args=("📤 Uploading", status_msg, start_time, task_id, message.from_user)
+                progress_args=("Upload", status_msg, start_time, task_id, message.from_user)
             )
         elif media_type == "audio":
             await client.send_audio(chat_id=message.chat.id, audio=file_to_send)
@@ -197,7 +225,6 @@ async def execute_processing(client: Client, user_id: int, message: Message):
         if os.path.exists(file_to_send):
             os.remove(file_to_send)
 
-    # Automatically clean status and tool messages
     await status_msg.delete()
     if "menu_message_id" in state:
         try:
