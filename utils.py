@@ -83,6 +83,10 @@ async def progress_bar(
         "start_time": start_time,
         "message": message,
         "user": user,
+        "file_name": file_name,
+        "engine": engine,
+        "task_number": task_number,
+        "total_tasks": total_tasks,
     }
 
     # Only edit the message on explicit trigger (Refresh button or phase start/complete)
