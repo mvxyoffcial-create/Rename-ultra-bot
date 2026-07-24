@@ -13,16 +13,14 @@ app = Client(
     api_id=Config.API_ID,
     api_hash=Config.API_HASH,
     bot_token=Config.BOT_TOKEN,
-    workers=Config.WORKERS,
+    workers=int(Config.WORKERS),  # Safe integer conversion
     plugins=plugins
 )
 
 async def main():
-    # Start internal health check HTTP web server
     await start_health_server()
     logging.info(f"Health server initialized on port {Config.PORT}")
     
-    # Start Pyrogram Telegram Client
     await app.start()
     bot_info = await app.get_me()
     logging.info(f"Bot started successfully as @{bot_info.username}")
