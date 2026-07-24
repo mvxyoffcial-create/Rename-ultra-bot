@@ -1,159 +1,93 @@
 import os
 from pyrogram import Client, filters
-from pyrogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
-from config import Config
+from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from database import get_user
+from utils import get_random_mix_id
 
-# Global state dictionary shared across handlers
 USER_STATES = {}
-AWAITING_THUMB = set()
 
-def build_tools_menu(actions: dict):
+def build_tools_markup(selected_actions: dict):
     def mark(key):
-        return "✅" if actions.get(key) else "⬜"
+        return "✅" if selected_actions.get(key) else "⬜"
 
-    buttons = [
-        [InlineKeyboardButton("🎬 Video Processing", callback_data="none")],
-        [InlineKeyboardButton(f"{mark('remove')} Stream Remove 🗑️", callback_data="toggle_action_remove")],
-        [InlineKeyboardButton(f"{mark('extract')} Stream Extract 📬", callback_data="toggle_action_extract")],
-        [InlineKeyboardButton(f"{mark('audio')} Extract Audio 🎵", callback_data="toggle_action_audio")],
-        [InlineKeyboardButton(f"{mark('subtitle')} Extract Subtitle 📝", callback_data="toggle_action_subtitle")],
-        [InlineKeyboardButton(f"{mark('screenshot')} Take Screenshot 📸", callback_data="toggle_action_screenshot")],
-        [InlineKeyboardButton(f"{mark('sample')} Sample Video 🎥", callback_data="toggle_action_sample")],
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🎬 Video Processing", callback_data="ignore")],
+        [InlineKeyboardButton(f"{mark('remove')} Stream Remove 🗑️", callback_data="tool_toggle_remove")],
+        [InlineKeyboardButton(f"{mark('extract')} Stream Extract 📤", callback_data="tool_toggle_extract")],
+        [InlineKeyboardButton(f"{mark('audio')} Extract Audio 🎵", callback_data="tool_toggle_audio")],
+        [InlineKeyboardButton(f"{mark('subtitle')} Extract Subtitle 📝", callback_data="tool_toggle_subtitle")],
+        [InlineKeyboardButton(f"{mark('screenshot')} Take Screenshot 📸", callback_data="tool_toggle_screenshot")],
+        [InlineKeyboardButton(f"{mark('sample')} Sample Video 🎬", callback_data="tool_toggle_sample")],
         [
             InlineKeyboardButton("✅ Done", callback_data="tool_action_done"),
             InlineKeyboardButton("Close ❌", callback_data="tool_action_close")
         ]
-    ]
-    return InlineKeyboardMarkup(buttons)
+    ])
 
-# Step 1: User sends a media file
-@Client.on_message(filters.private & (filters.video | filters.document))
-async def handle_incoming_file(client: Client, message: Message):
+@Client.on_message((filters.video | filters.document) & filters.private)
+async def handle_media(client: Client, message: Message):
     user_id = message.from_user.id
+    user = await get_user(user_id)
+    
     file = message.video or message.document
-    file_name = file.file_name or "video.mp4"
-    task_id = f"task_{user_id}_{int(message.date.timestamp() if message.date else 0)}"
+    if not file:
+        return
+
+    if file.file_size > 2 * 1024 * 1024 * 1024 and not user.get("is_premium"):
+        return await message.reply_text("<b>❌ File Size Limit Exceeded!</b>\nFree users can only process files up to 2GB.")
 
     USER_STATES[user_id] = {
         "message": message,
-        "file_name": file_name,
-        "task_id": task_id,
-        "selected_actions": {}
+        "file_name": getattr(file, "file_name", "video.mp4") or "video.mp4",
+        "file_size": file.file_size,
+        "selected_actions": {},
+        "task_id": f"task_{get_random_mix_id()}"
     }
 
     await message.reply_text(
-        f"<b>📂 File Received:</b> <code>{file_name}</code>\n\n"
-        "Please send the <b>new name</b> for this file (including extension, e.g., <code>MyVideo.mp4</code>):"
+        f"<b>📁 File Received:</b> <code>{USER_STATES[user_id]['file_name']}</code>\n\n"
+        f"Please send the <b>new name</b> for this file:",
+        reply_to_message_id=message.id
     )
 
-# Step 2: User sends the new filename
-@Client.on_message(filters.private & filters.text & ~filters.command(["start", "help", "settings"]))
-async def process_new_name(client: Client, message: Message):
+@Client.on_message(filters.text & filters.private & ~filters.command(["start", "settings", "help", "info"]))
+async def handle_new_name(client: Client, message: Message):
     user_id = message.from_user.id
+    if user_id not in USER_STATES or "new_name" in USER_STATES[user_id]:
+        return
+
+    new_name = message.text.strip()
+    USER_STATES[user_id]["new_name"] = new_name
     
-    if user_id not in USER_STATES or "message" not in USER_STATES[user_id]:
-        return await message.reply_text("⚠️ No active file found. Please send or forward a media file first.")
+    user = await get_user(user_id)
+    if user["settings"]["video_tools"]:
+        msg = await message.reply_text(
+            f"<b>✏️ New Name Set:</b> <code>{new_name}</code>\n\nSelect the actions you wish to execute:",
+            reply_markup=build_tools_markup(USER_STATES[user_id]["selected_actions"])
+        )
+        USER_STATES[user_id]["menu_message_id"] = msg.id
+    else:
+        from handlers.stream import execute_processing
+        await execute_processing(client, user_id, message)
 
-    state = USER_STATES[user_id]
-    state["new_name"] = message.text.strip()
-    
-    state["selected_actions"] = {
-        "remove": False,
-        "extract": False,
-        "audio": False,
-        "subtitle": False,
-        "screenshot": False,
-        "sample": False
-    }
-
-    menu_msg = await message.reply_text(
-        f"<b>⚙️ Select Processing Tools for:</b>\n<code>{state['new_name']}</code>",
-        reply_markup=build_tools_menu(state["selected_actions"])
-    )
-    state["menu_message_id"] = menu_msg.id
-
-# Step 3: Toggle processing choices in menu
-@Client.on_callback_query(filters.regex(r"^toggle_action_"))
-async def toggle_action_cb(client: Client, callback_query: CallbackQuery):
+@Client.on_callback_query(filters.regex("^tool_toggle_"))
+async def toggle_tools_cb(client: Client, callback_query: CallbackQuery):
     user_id = callback_query.from_user.id
     if user_id not in USER_STATES:
-        return await callback_query.answer("⚠️ Session expired! Resend file.", show_alert=True)
+        return await callback_query.answer("Task expired!", show_alert=True)
 
-    action_key = callback_query.data.replace("toggle_action_", "")
-    state = USER_STATES[user_id]
-    
-    current_status = state["selected_actions"].get(action_key, False)
-    state["selected_actions"][action_key] = not current_status
+    action = callback_query.data.replace("tool_toggle_", "")
+    curr = USER_STATES[user_id]["selected_actions"].get(action, False)
+    USER_STATES[user_id]["selected_actions"][action] = not curr
 
-    try:
-        await callback_query.message.edit_reply_markup(
-            reply_markup=build_tools_menu(state["selected_actions"])
-        )
-        await callback_query.answer()
-    except Exception:
-        await callback_query.answer()
+    await callback_query.message.edit_reply_markup(
+        reply_markup=build_tools_markup(USER_STATES[user_id]["selected_actions"])
+    )
+    await callback_query.answer()
 
-# Settings Menu & Thumbnail Controls
-@Client.on_callback_query(filters.regex("^open_settings$"))
-async def open_settings_cb(client: Client, callback_query: CallbackQuery):
-    user_id = callback_query.from_user.id
-    thumb_path = os.path.join(Config.DOWNLOAD_DIR, f"thumb_{user_id}.jpg")
-    has_thumb = "✅ Saved" if os.path.exists(thumb_path) else "❌ Not Set"
-
-    text = f"<b>⚙️ Bot Settings</b>\n\n<b>Custom Thumbnail:</b> {has_thumb}"
-    buttons = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("🖼️ Set Thumbnail", callback_data="set_thumb"),
-            InlineKeyboardButton("🗑️ Delete Thumbnail", callback_data="delete_thumb")
-        ],
-        [
-            InlineKeyboardButton("👁️ View Thumbnail", callback_data="view_thumb"),
-            InlineKeyboardButton("Close ❌", callback_data="tool_action_close")
-        ]
-    ])
-    await callback_query.message.edit_text(text, reply_markup=buttons)
-
-@Client.on_callback_query(filters.regex("^set_thumb$"))
-async def set_thumb_cb(client: Client, callback_query: CallbackQuery):
-    user_id = callback_query.from_user.id
-    AWAITING_THUMB.add(user_id)
-    buttons = InlineKeyboardMarkup([[InlineKeyboardButton("Cancel ❌", callback_data="open_settings")]])
-    await callback_query.message.edit_text("📸 Please send or reply with the photo for thumbnail.", reply_markup=buttons)
-
-@Client.on_message(filters.private & filters.photo)
-async def save_photo_thumb(client: Client, message: Message):
-    user_id = message.from_user.id
-    if user_id in AWAITING_THUMB or message.reply_to_message:
-        os.makedirs(Config.DOWNLOAD_DIR, exist_ok=True)
-        thumb_path = os.path.join(Config.DOWNLOAD_DIR, f"thumb_{user_id}.jpg")
-        await client.download_media(message=message.photo.file_id, file_name=thumb_path)
-        AWAITING_THUMB.discard(user_id)
-        await message.reply_text("✅ <b>Custom thumbnail saved successfully!</b>")
-
-@Client.on_callback_query(filters.regex("^view_thumb$"))
-async def view_thumb_cb(client: Client, callback_query: CallbackQuery):
-    user_id = callback_query.from_user.id
-    thumb_path = os.path.join(Config.DOWNLOAD_DIR, f"thumb_{user_id}.jpg")
-    if os.path.exists(thumb_path):
-        await client.send_photo(chat_id=callback_query.message.chat.id, photo=thumb_path, caption="🖼️ Saved Thumbnail")
-        await callback_query.answer()
-    else:
-        await callback_query.answer("⚠️ No custom thumbnail found!", show_alert=True)
-
-@Client.on_callback_query(filters.regex("^delete_thumb$"))
-async def delete_thumb_cb(client: Client, callback_query: CallbackQuery):
-    user_id = callback_query.from_user.id
-    thumb_path = os.path.join(Config.DOWNLOAD_DIR, f"thumb_{user_id}.jpg")
-    if os.path.exists(thumb_path):
-        os.remove(thumb_path)
-        await callback_query.answer("🗑️ Thumbnail deleted!", show_alert=True)
-        await open_settings_cb(client, callback_query)
-    else:
-        await callback_query.answer("⚠️ No thumbnail to delete.", show_alert=True)
-
-@Client.on_callback_query(filters.regex("^tool_action_close$"))
+@Client.on_callback_query(filters.regex("tool_action_close"))
 async def close_menu_cb(client: Client, callback_query: CallbackQuery):
     user_id = callback_query.from_user.id
     USER_STATES.pop(user_id, None)
     await callback_query.message.delete()
-    await callback_query.answer("Cancelled.")
+    await callback_query.answer("Cancelled task.")
