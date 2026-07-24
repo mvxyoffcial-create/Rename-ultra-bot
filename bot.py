@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import Optional, Tuple, Dict, Any
 
 import aiohttp
+from aiohttp import web
 import ffmpeg
 import psutil
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -25,7 +26,7 @@ from pyrogram.enums import ParseMode
 # Configuration
 from config import (
     API_ID, API_HASH, BOT_TOKEN, MONGO_URL,
-    ADMIN_IDS, FORCE_SUB_CHANNELS, PICS_URL
+    ADMIN_IDS, FORCE_SUB_CHANNELS, PICS_URL, PORT
 )
 
 # Setup logging
@@ -1074,24 +1075,12 @@ Audio: .mp3, .aac, .m4a, .flac, .opus"""
     ]
     await message.reply_text(text, reply_markup=InlineKeyboardMarkup(buttons))
     # Wait for reply
-    # We'll handle rename via callback or separate message handler
-    # For simplicity, we'll use a state: expecting user to reply with new name
-    # We'll use a filter that captures replies to this message
-    # This is a simplified version; in production use a state machine
-    # For now, we'll just set a flag
-    # Actually, we can use a global dict to track users waiting for rename
-    # Or use Pyrogram's conversation handler. We'll implement a simple dict.
-    # Better: use filters.regex to capture replies and check if it matches a file extension.
-    # We'll do that in a separate handler with custom filter.
-    # I'll implement a conversation system with a simple dict.
-    # For this code, I'll use a straightforward approach: store the file message and wait for user reply.
-    # We'll define a global waiting dict.
+    # We'll use a global dict to store waiting users
     waiting_rename[user_id] = {
         "message": message,
         "filename": filename,
         "file_size": size
     }
-    # Then in a separate handler for text messages, we'll check if user is in waiting_rename and process.
 
 # Global waiting dict
 waiting_rename = {}
@@ -1323,12 +1312,8 @@ async def callback_handler(client, callback: CallbackQuery):
         return
     
     # Conversion callbacks and other tools will be handled similarly.
-    # Due to space, we'll implement a generic forwarding to the processing logic.
-    # For demo, we can handle a few.
-    
     if data.startswith("convert_"):
         fmt = data.split("_")[1]
-        # Need to know which file to convert - we'll ask user to send a file or reply.
         await callback.message.reply_text(
             f"🔄 <b>Convert to .{fmt}</b>\n\nPlease send the file you want to convert or reply to an existing file.",
             reply_markup=ForceReply(selective=True)
@@ -1336,7 +1321,27 @@ async def callback_handler(client, callback: CallbackQuery):
         await callback.answer()
         return
     
-    # Add more handlers as needed...
+    # More handlers can be added for other tools...
+
+# -------------------------------------------------------------------
+# Health Check Web Server
+# -------------------------------------------------------------------
+
+async def health_check(request):
+    return web.Response(text="OK", status=200)
+
+async def start_web_server():
+    web_app = web.Application()
+    web_app.router.add_get("/", health_check)
+    web_app.router.add_get("/health", health_check)
+    runner = web.AppRunner(web_app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", PORT)
+    await site.start()
+    logger.info(f"Web server started on port {PORT}")
+    # Keep the server running forever (it runs in background)
+    while True:
+        await asyncio.sleep(3600)
 
 # -------------------------------------------------------------------
 # Main
@@ -1346,7 +1351,12 @@ async def main():
     # Start bot
     await app.start()
     logger.info("Bot started!")
+    # Start web server in background
+    web_task = asyncio.create_task(start_web_server())
+    # Keep bot running
     await app.idle()
+    # Cleanup
+    web_task.cancel()
 
 if __name__ == "__main__":
     app.run()
