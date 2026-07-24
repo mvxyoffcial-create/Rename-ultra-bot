@@ -327,14 +327,24 @@ async def execute_processing(client: Client, user_id: int, message: Message):
             outputs_to_upload.append((sample_out, "video"))
 
     # 2b. Thumbnail + metadata (used to give uploaded videos a proper preview
-    # instead of Telegram showing a blank/black player)
-    thumb_path = os.path.join(Config.DOWNLOAD_DIR, f"{os.path.splitext(new_name)[0]}_thumb.jpg")
+    # instead of Telegram showing a blank/black player). A user-supplied
+    # custom thumbnail (sent as a photo during the naming step) always wins
+    # over the auto-generated one.
+    custom_thumb = state.get("custom_thumb")
     thumb_ok = False
+    thumb_path = None
+
+    if custom_thumb and os.path.exists(custom_thumb):
+        thumb_path = custom_thumb
+        thumb_ok = True
+    else:
+        thumb_path = os.path.join(Config.DOWNLOAD_DIR, f"{os.path.splitext(new_name)[0]}_thumb.jpg")
+        try:
+            thumb_ok = await take_screenshot(output_path, thumb_path)
+        except Exception:
+            thumb_ok = False
+
     video_meta = {"duration": None, "width": None, "height": None}
-    try:
-        thumb_ok = await take_screenshot(output_path, thumb_path)
-    except Exception:
-        thumb_ok = False
 
     try:
         streams = await get_media_streams(output_path)
