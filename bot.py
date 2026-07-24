@@ -10,6 +10,7 @@ import logging
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 
+from aiohttp import web
 import aiohttp
 from motor.motor_asyncio import AsyncIOMotorClient
 from pyrogram import Client, filters, enums
@@ -47,6 +48,22 @@ app = Client(
     bot_token=config.BOT_TOKEN,
     workers=500
 )
+
+# ------------------- KOYEB HEALTH CHECK SERVER ------------------- #
+
+async def health_check_handler(request):
+    return web.Response(text="OK", status=200)
+
+async def start_health_check_server():
+    server = web.Application()
+    server.router.add_get('/', health_check_handler)
+    server.router.add_get('/health', health_check_handler)
+    runner = web.AppRunner(server)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 8000))
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    logger.info(f"Health check web server running on port {port}")
 
 # ------------------- UTILITY FUNCTIONS ------------------- #
 
@@ -179,7 +196,6 @@ async def start_handler(client, message: Message):
 
     await get_or_create_user(message.from_user)
 
-    # 1. Sticker Sequence
     try:
         stk = await message.reply_sticker(config.START_STICKER)
         await asyncio.sleep(2)
@@ -187,7 +203,6 @@ async def start_handler(client, message: Message):
     except Exception:
         pass
 
-    # 2. Image Banner
     img_url = f"{random.choice(config.PICS_URL)}?r={get_random_mix_id()}"
     start_txt = (
         f"<b>ʜᴇʏ {message.from_user.mention}!</b>\n\n"
@@ -218,174 +233,15 @@ async def start_handler(client, message: Message):
     except Exception:
         await message.reply_photo(photo=config.FALLBACK_PIC, caption=start_txt, reply_markup=buttons)
 
-@app.on_message(filters.command("help") & filters.private)
-async def help_handler(client, message: Message):
-    if await is_banned(message.from_user.id): return
-    is_joined, markup = await check_force_sub(client, message.from_user.id)
-    if not is_joined: return await message.reply("⚠️ <b>You must join our channels to use this bot!</b>", reply_markup=markup)
+# ------------------- MAIN ENTRYPOINT ------------------- #
 
-    help_txt = (
-        "<b>✨ ʜᴏᴡ ᴛᴏ ᴜsᴇ ʀᴇɴᴀᴍᴇ ʙᴏᴛ ✨</b>\n\n"
-        "<b>📝 ғɪʟᴇ ʀᴇɴᴀᴍɪɴɢ:</b>\n• sᴇɴᴅ ᴀɴʏ ғɪʟᴇ/ᴠɪᴅᴇᴏ/ᴀᴜᴅɪᴏ\n• ʀᴇᴘʟʏ ᴛᴏ ɪᴛ ᴡɪᴛʜ ɴᴇᴡ ɴᴀᴍᴇ + ᴇxᴛᴇɴsɪᴏɴ\n• ʙᴏᴛ ᴡɪʟʟ ʀᴇɴᴀᴍᴇ & sᴇɴᴅ ʙᴀᴄᴋ\n\n"
-        "<b>🖼️ ᴛʜᴜᴍʙɴᴀɪʟ:</b>\n/thumbnail - sᴇᴛ ᴘᴇʀᴍᴀɴᴇɴᴛ ᴛʜᴜᴍʙɴᴀɪʟ\n/delthumbnail - ʀᴇᴍᴏᴠᴇ ᴛʜᴜᴍʙɴᴀɪʟ\n\n"
-        "<b>📋 ᴍᴇᴛᴀᴅᴀᴛᴀ:</b>\n/metadata - sᴇᴛ ᴘᴇʀᴍᴀɴᴇɴᴛ ᴍᴇᴛᴀᴅᴀᴛᴀ\n/delmetadata - ʀᴇᴍᴏᴠᴇ ᴍᴇᴛᴀᴅᴀᴛᴀ\n\n"
-        "<b>✍️ ᴄᴀᴘᴛɪᴏɴ:</b>\n/caption - sᴇᴛ ᴘᴇʀᴍᴀɴᴇɴᴛ ᴄᴀᴘᴛɪᴏɴ\n/delcaption - ʀᴇᴍᴏᴠᴇ ᴄᴀᴘᴛɪᴏɴ\n\n"
-        "<b>🏷️ ᴘʀᴇғɪx/sᴜғғɪx:</b>\n/prefix - ᴀᴅᴅ ᴘʀᴇғɪx ᴛᴏ ғɪʟᴇɴᴀᴍᴇ\n/suffix - ᴀᴅᴅ sᴜғғɪx ᴛᴏ ғɪʟᴇɴᴀᴍᴇ\n\n"
-        "<b>ℹ️ ᴏᴛʜᴇʀ ᴄᴏᴍᴍᴀɴᴅs:</b>\n/info - ʏᴏᴜʀ ᴅᴇᴛᴀɪʟs ᴡɪᴛʜ ᴘʀᴏғɪʟᴇ ᴘʜᴏᴛᴏ\n/settings - ᴠɪᴇᴡ ʏᴏᴜʀ ᴄᴜʀʀᴇɴᴛ sᴇᴛᴛɪɴɢs\n/ping - ᴄʜᴇᴄᴋ ʙᴏᴛ ʀᴇsᴘᴏɴsᴇ ᴛɪᴍᴇ\n/about - ʙᴏᴛ ɪɴғᴏʀᴍᴀᴛɪᴏɴ"
-    )
-    await message.reply(help_txt, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Back to Home", callback_data="home")]]))
-
-@app.on_message(filters.command("about") & filters.private)
-async def about_handler(client, message: Message):
-    if await is_banned(message.from_user.id): return
-    is_joined, markup = await check_force_sub(client, message.from_user.id)
-    if not is_joined: return await message.reply("⚠️ <b>You must join our channels to use this bot!</b>", reply_markup=markup)
-
-    bot_info = await client.get_me()
-    about_txt = (
-        f"<b>╭────[ ᴍʏ ᴅᴇᴛᴀɪʟs ]────⍟\n\n"
-        f"├⍟ Mʏ Nᴀᴍᴇ : {bot_info.first_name}\n"
-        f"├⍟ Dᴇᴠᴇʟᴏᴘᴇʀ : <a href='https://t.me/Venuboyy'>ᴠᴇɴᴜʙᴏʏʏ</a> 👨‍💻\n"
-        f"├⍟ Oᴡɴᴇʀ : <a href='https://t.me/Venuboyy'>ᴠᴇɴᴜʙᴏʏʏ</a> 👑\n"
-        f"├⍟ Lɪʙʀᴀʀʏ : <a href='https://github.com/pyrogram/pyrogram'>ᴘʏʀᴏɢʀᴀᴍ ᴠ2</a> 📚\n"
-        f"├⍟ Lᴀɴɢᴜᴀɢᴇ : <a href='https://www.python.org/'>ᴘʏᴛʜᴏɴ 3</a> 🐍\n"
-        f"├⍟ Dᴀᴛᴀʙᴀsᴇ : <a href='https://www.mongodb.com/'>ᴍᴏɴɢᴏ ᴅʙ</a> 🍃\n"
-        f"├⍟ Sᴇʀᴠᴇʀ : ᴅᴇᴅɪᴄᴀᴛᴇᴅ ᴠᴘs ☁️\n"
-        f"├⍟ Fᴇᴀᴛᴜʀᴇ : ғɪʟᴇ ʀᴇɴᴀᴍᴇʀ 📝\n"
-        f"├⍟ Wᴏʀᴋᴇʀs : 500 ᴄᴏɴᴄᴜʀʀᴇɴᴛ ⚡\n"
-        f"├⍟ Bᴜɪʟᴅ Sᴛᴀᴛᴜs : ᴠ2.0 [ ᴜʟᴛʀᴀ ] 🚀\n"
-        f"╰───────────────⍟</b>"
-    )
-    await message.reply(about_txt, disable_web_page_preview=True, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Back to Home", callback_data="home")]]))
-
-@app.on_message(filters.command("info") & filters.private)
-async def info_handler(client, message: Message):
-    if await is_banned(message.from_user.id): return
-    is_joined, markup = await check_force_sub(client, message.from_user.id)
-    if not is_joined: return await message.reply("⚠️ <b>You must join our channels to use this bot!</b>", reply_markup=markup)
-
-    user = message.from_user
-    db_user = await get_or_create_user(user)
-
-    info_text = (
-        f"<b>📋 ᴜsᴇʀ ɪɴғᴏʀᴍᴀᴛɪᴏɴ</b>\n\n"
-        f"➲ <b>First Name:</b> {user.first_name}\n"
-        f"➲ <b>Last Name:</b> {user.last_name or 'N/A'}\n"
-        f"➲ <b>Telegram ID:</b> <code>{user.id}</code>\n"
-        f"➲ <b>Data Centre:</b> {user.dc_id or 'Unknown'}\n"
-        f"➲ <b>User Name:</b> @{user.username if user.username else 'N/A'}\n"
-        f"➲ <b>User 𝖫𝗂𝗇𝗄:</b> <a href='tg://user?id={user.id}'>Click Here</a>\n\n"
-        f"<b>📊 Bot Usage:</b>\n"
-        f"➲ <b>Files Processed:</b> {db_user.get('total_processed', 0)}\n"
-        f"➲ <b>Joined:</b> {db_user.get('joined_date').strftime('%Y-%m-%d') if db_user.get('joined_date') else 'N/A'}"
-    )
-
-    buttons = InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Refresh", callback_data="refresh_info"), InlineKeyboardButton("🏠 Home", callback_data="home")]])
-    
-    photos = [p async for p in client.get_chat_photos(user.id, limit=1)]
-    if photos:
-        await message.reply_photo(photo=photos[0].file_id, caption=info_text, reply_markup=buttons)
-    else:
-        await message.reply(info_text, reply_markup=buttons)
-
-@app.on_message(filters.command("settings") & filters.private)
-async def settings_handler(client, message: Message):
-    if await is_banned(message.from_user.id): return
-    is_joined, markup = await check_force_sub(client, message.from_user.id)
-    if not is_joined: return await message.reply("⚠️ <b>You must join our channels to use this bot!</b>", reply_markup=markup)
-
-    user_data = await get_or_create_user(message.from_user)
-    
-    thumb_status = "✅ Set" if user_data.get("thumbnail") else "❌ Not Set"
-    meta_status = "✅ Set" if user_data.get("metadata_title") else "❌ Not Set"
-    caption_status = "✅ Set" if user_data.get("caption") else "❌ Not Set"
-    prefix = user_data.get("prefix") or "None"
-    suffix = user_data.get("suffix") or "None"
-
-    settings_text = (
-        f"<b>⚙️ ʏᴏᴜʀ ᴄᴜʀʀᴇɴᴛ sᴇᴛᴛɪɴɢs</b>\n\n"
-        f"🖼️ <b>Thumbnail:</b> {thumb_status}\n"
-        f"📋 <b>Metadata:</b> {meta_status}\n"
-        f"✍️ <b>Caption:</b> {caption_status}\n"
-        f"🏷️ <b>Prefix:</b> {prefix}\n"
-        f"🏷️ <b>Suffix:</b> {suffix}\n\n"
-        f"<b>📊 Stats:</b>\n"
-        f"📁 <b>Files Processed:</b> {user_data.get('total_processed', 0)}"
-    )
-
-    buttons = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🖼️ Set Thumbnail", callback_data="cmd_thumb"), InlineKeyboardButton("🗑️ Del Thumbnail", callback_data="del_thumb")],
-        [InlineKeyboardButton("📋 Set Metadata", callback_data="cmd_meta"), InlineKeyboardButton("🗑️ Del Metadata", callback_data="del_meta")],
-        [InlineKeyboardButton("✍️ Set Caption", callback_data="cmd_caption"), InlineKeyboardButton("🗑️ Del Caption", callback_data="del_caption")],
-        [InlineKeyboardButton("🏷️ Prefix", callback_data="cmd_prefix"), InlineKeyboardButton("🏷️ Suffix", callback_data="cmd_suffix")],
-        [InlineKeyboardButton("🏠 Home", callback_data="home")]
-    ])
-
-    await message.reply(settings_text, reply_markup=buttons)
-
-@app.on_message(filters.command("ping") & filters.private)
-async def ping_handler(client, message: Message):
-    if await is_banned(message.from_user.id): return
-    is_joined, markup = await check_force_sub(client, message.from_user.id)
-    if not is_joined: return await message.reply("⚠️ <b>You must join our channels to use this bot!</b>", reply_markup=markup)
-
-    start = time.time()
-    msg = await message.reply("🏓 <b>Pinging...</b>")
-    end = time.time()
-    ping_time = round((end - start) * 1000, 2)
-    uptime = time_formatter((time.time() - bot_start_time) * 1000)
-
-    res_text = (
-        f"<b>🏓 ᴘᴏɴɢ!</b>\n\n"
-        f"<b>⏱️ Response Time:</b> <code>{ping_time}ms</code>\n"
-        f"<b>📡 Bot Uptime:</b> <code>{uptime}</code>\n"
-        f"<b>⚡ Workers:</b> <code>500</code>\n"
-        f"<b>🗄️ Database:</b> <code>Connected ✅</code>"
-    )
-    await msg.edit_text(res_text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Refresh", callback_data="cmd_ping"), InlineKeyboardButton("🏠 Home", callback_data="home")]]))
-
-# ------------------- ADMIN COMMANDS ------------------- #
-
-@app.on_message(filters.command("stats") & filters.private)
-async def stats_handler(client, message: Message):
-    if message.from_user.id not in config.ADMIN_IDS: return
-    
-    total_users = await users_col.count_documents({})
-    banned_users = await users_col.count_documents({"banned": True})
-    
-    cpu = psutil.cpu_percent()
-    mem = psutil.virtual_memory()
-    disk = psutil.disk_usage('/')
-    uptime = time_formatter((time.time() - bot_start_time) * 1000)
-
-    stats_text = (
-        f"<b>📊 ʙᴏᴛ sᴛᴀᴛɪsᴛɪᴄs</b>\n\n"
-        f"<b>👥 Users:</b>\n"
-        f"• Total: {total_users}\n"
-        f"• Banned: {banned_users}\n\n"
-        f"<b>💻 System:</b>\n"
-        f"• CPU: {cpu}%\n"
-        f"• RAM: {humanbytes(mem.used)}/{humanbytes(mem.total)} ({mem.percent}%)\n"
-        f"• Disk: {humanbytes(disk.used)}/{humanbytes(disk.total)} ({disk.percent}%)\n\n"
-        f"<b>⚡ Bot:</b>\n"
-        f"• Uptime: {uptime}\n"
-        f"• Workers: 500\n\n"
-        f"<b>🗄️ Database:</b>\n"
-        f"• Status: Connected ✅"
-    )
-    await message.reply(stats_text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Refresh", callback_data="cmd_stats")]]))
-
-@app.on_message(filters.command("stop") & filters.private)
-async def cancel_task_cmd(client, message: Message):
-    try:
-        task_id = message.text.split("_")[1]
-        CANCEL_TASKS[task_id] = True
-        await message.reply("❌ <b>Process cancellation requested!</b>")
-    except Exception:
-        await message.reply("❌ Invalid Task ID")
-
-# ------------------- RUN APP ------------------- #
+async def main():
+    # Start Koyeb Health Check web server
+    await start_health_check_server()
+    # Start Pyrogram Client
+    await app.start()
+    logger.info("Bot is successfully running...")
+    await asyncio.Event().wait()
 
 if __name__ == "__main__":
-    print("Bot Starting...")
-    app.run()
+    asyncio.run(main())
