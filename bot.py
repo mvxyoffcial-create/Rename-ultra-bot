@@ -40,6 +40,27 @@ log = logging.getLogger("rename_bot")
 
 os.makedirs(config.DOWNLOAD_DIR, exist_ok=True)
 
+
+async def safe_db_call(coro, default=None, label="db call"):
+    """
+    Wrap any DB-touching coroutine so that if MongoDB is slow/unreachable
+    (e.g. Atlas IP allowlist doesn't include the host's egress IP), the bot
+    fails open instead of hanging silently forever on every message.
+    """
+    try:
+        return await coro
+    except Exception as e:
+        log.warning(f"{label} failed, DB may be unreachable: {e}")
+        return default
+
+
+EMPTY_USER = {
+    "thumbnail": None, "metadata_title": None, "metadata_artist": None,
+    "metadata_album": None, "metadata_year": None, "caption": None,
+    "prefix": None, "suffix": None, "banned": False, "total_processed": 0,
+    "joined_date": None,
+}
+
 app = Client(
     "rename_bot",
     api_id=config.API_ID,
@@ -324,27 +345,34 @@ def build_caption(filename: str, size: int, user: dict) -> str:
 
 @app.on_message(filters.command("start") & filters.private)
 async def start_cmd(client: Client, message: Message):
-    user = message.from_user
-    if await db.is_banned(user.id):
-        await message.reply_text("🚫 <b>You are banned from using this bot.</b>")
-        return
+    try:
+        user = message.from_user
+        if await safe_db_call(db.is_banned(user.id), default=False, label="is_banned"):
+            await message.reply_text("🚫 <b>You are banned from using this bot.</b>")
+            return
 
-    await db.add_user_if_new(user.id, user.first_name, user.last_name, user.username)
+        await safe_db_call(db.add_user_if_new(user.id, user.first_name, user.last_name, user.username), default=False, label="add_user_if_new")
 
-    text = START_TXT.format(user.mention)
-    await message.reply_text(text, reply_markup=home_keyboard())
+        text = START_TXT.format(user.mention)
+        await message.reply_text(text, reply_markup=home_keyboard())
+    except Exception:
+        log.exception("start_cmd failed")
+        try:
+            await message.reply_text("⚠️ Something went wrong starting up. Please try again in a moment.")
+        except Exception:
+            pass
 
 
 @app.on_message(filters.command("help") & filters.private)
 async def help_cmd(client: Client, message: Message):
-    if await db.is_banned(message.from_user.id):
+    if await safe_db_call(db.is_banned(message.from_user.id), default=False, label="is_banned"):
         return
     await message.reply_text(HELP_TXT, reply_markup=back_home_kb(), disable_web_page_preview=True)
 
 
 @app.on_message(filters.command("about") & filters.private)
 async def about_cmd(client: Client, message: Message):
-    if await db.is_banned(message.from_user.id):
+    if await safe_db_call(db.is_banned(message.from_user.id), default=False, label="is_banned"):
         return
     me = await client.get_me()
     await message.reply_text(
@@ -355,9 +383,9 @@ async def about_cmd(client: Client, message: Message):
 @app.on_message(filters.command("info") & filters.private)
 async def info_cmd(client: Client, message: Message):
     user = message.from_user
-    if await db.is_banned(user.id):
+    if await safe_db_call(db.is_banned(user.id), default=False, label="is_banned"):
         return
-    udoc = await db.get_user(user.id)
+    udoc = await safe_db_call(db.get_user(user.id), default=dict(EMPTY_USER), label="get_user")
 
     try:
         dc_id = user.dc_id or "N/A"
@@ -397,9 +425,9 @@ async def info_cmd(client: Client, message: Message):
 @app.on_message(filters.command("settings") & filters.private)
 async def settings_cmd(client: Client, message: Message):
     user_id = message.from_user.id
-    if await db.is_banned(user_id):
+    if await safe_db_call(db.is_banned(user_id), default=False, label="is_banned"):
         return
-    u = await db.get_user(user_id)
+    u = await safe_db_call(db.get_user(user_id), default=dict(EMPTY_USER), label="get_user")
     text = (
         "<b>⚙️ ʏᴏᴜʀ ᴄᴜʀʀᴇɴᴛ sᴇᴛᴛɪɴɢs</b>\n\n"
         f"🖼️ <b>Thumbnail:</b> {'✅ Set' if u.get('thumbnail') else '❌ Not Set'}\n"
@@ -440,7 +468,7 @@ async def ping_cmd(client: Client, message: Message):
 @app.on_message(filters.command("thumbnail") & filters.private)
 async def thumbnail_cmd(client: Client, message: Message):
     user_id = message.from_user.id
-    if await db.is_banned(user_id):
+    if await safe_db_call(db.is_banned(user_id), default=False, label="is_banned"):
         return
 
     if message.reply_to_message and message.reply_to_message.photo:
@@ -476,7 +504,7 @@ async def delthumbnail_cmd(client: Client, message: Message):
 @app.on_message(filters.command("metadata") & filters.private)
 async def metadata_cmd(client: Client, message: Message):
     user_id = message.from_user.id
-    if await db.is_banned(user_id):
+    if await safe_db_call(db.is_banned(user_id), default=False, label="is_banned"):
         return
     pending[user_id] = {"action": "await_metadata"}
     await message.reply_text(
@@ -504,7 +532,7 @@ async def delmetadata_cmd(client: Client, message: Message):
 @app.on_message(filters.command("caption") & filters.private)
 async def caption_cmd(client: Client, message: Message):
     user_id = message.from_user.id
-    if await db.is_banned(user_id):
+    if await safe_db_call(db.is_banned(user_id), default=False, label="is_banned"):
         return
     pending[user_id] = {"action": "await_caption"}
     await message.reply_text(
@@ -787,7 +815,7 @@ reply_rename_map = {}  # incoming_file_message_id -> file_message
 @app.on_message((filters.document | filters.video | filters.audio | filters.animation) & filters.private)
 async def file_intake(client: Client, message: Message):
     user_id = message.from_user.id
-    if await db.is_banned(user_id):
+    if await safe_db_call(db.is_banned(user_id), default=False, label="is_banned"):
         return
 
     state = pending.get(user_id)
@@ -871,7 +899,7 @@ async def handle_rename_reply(client: Client, message: Message):
 async def process_rename(client: Client, trigger_message: Message, file_message: Message, new_name: str):
     global queue_depth
     user_id = trigger_message.from_user.id
-    user = await db.get_user(user_id)
+    user = await safe_db_call(db.get_user(user_id), default=dict(EMPTY_USER), label="get_user")
 
     stop_token = uuid.uuid4().hex[:12]
     cancel_event = asyncio.Event()
@@ -926,7 +954,7 @@ async def process_rename(client: Client, trigger_message: Message, file_message:
             )
 
         await status.delete()
-        await db.increment_processed(user_id)
+        await safe_db_call(db.increment_processed(user_id), default=None, label="increment_processed")
 
     except asyncio.CancelledError:
         await status.edit_text("❌ <b>Process cancelled!</b>")
@@ -1048,7 +1076,7 @@ async def run_media_job(client: Client, message: Message, file_key: str, op: str
             progress=tracker2.update,
         )
         await status.delete()
-        await db.increment_processed(message.from_user.id)
+        await safe_db_call(db.increment_processed(message.from_user.id), default=None, label="increment_processed")
 
     except ffmpeg_utils.FFmpegError as e:
         await status.edit_text(f"❌ <b>ffmpeg error:</b>\n<code>{str(e)[:300]}</code>")
@@ -1115,7 +1143,7 @@ async def callback_router(client: Client, cq: CallbackQuery):
             await cq.message.edit_text(format_about(me.first_name), reply_markup=back_home_kb(), disable_web_page_preview=True)
 
         elif data == "open_settings":
-            u = await db.get_user(user_id)
+            u = await safe_db_call(db.get_user(user_id), default=dict(EMPTY_USER), label="get_user")
             text = (
                 "<b>⚙️ ʏᴏᴜʀ ᴄᴜʀʀᴇɴᴛ sᴇᴛᴛɪɴɢs</b>\n\n"
                 f"🖼️ <b>Thumbnail:</b> {'✅ Set' if u.get('thumbnail') else '❌ Not Set'}\n"
@@ -1158,7 +1186,7 @@ async def callback_router(client: Client, cq: CallbackQuery):
             await cq.message.edit_text(text, reply_markup=kb)
 
         elif data == "refresh_info":
-            u = await db.get_user(user_id)
+            u = await safe_db_call(db.get_user(user_id), default=dict(EMPTY_USER), label="get_user")
             user = cq.from_user
             caption = (
                 "<b>📋 ᴜsᴇʀ ɪɴғᴏʀᴍᴀᴛɪᴏɴ</b>\n\n"
@@ -1375,7 +1403,8 @@ async def main():
     log.info("Starting Rename Bot...")
     runner = await start_health_server()
     await app.start()
-    log.info("Bot started.")
+    me = await app.get_me()
+    log.info(f"Bot started as @{me.username} (id={me.id}).")
     try:
         await idle()
     finally:
