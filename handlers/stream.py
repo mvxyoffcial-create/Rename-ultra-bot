@@ -326,6 +326,30 @@ async def execute_processing(client: Client, user_id: int, message: Message):
         if await create_sample(output_path, sample_out):
             outputs_to_upload.append((sample_out, "video"))
 
+    # 2b. Thumbnail + metadata (used to give uploaded videos a proper preview
+    # instead of Telegram showing a blank/black player)
+    thumb_path = os.path.join(Config.DOWNLOAD_DIR, f"{os.path.splitext(new_name)[0]}_thumb.jpg")
+    thumb_ok = False
+    video_meta = {"duration": None, "width": None, "height": None}
+    try:
+        thumb_ok = await take_screenshot(output_path, thumb_path)
+    except Exception:
+        thumb_ok = False
+
+    try:
+        streams = await get_media_streams(output_path)
+        for s in streams:
+            if s.get("codec_type") == "video":
+                if s.get("width"):
+                    video_meta["width"] = int(s["width"])
+                if s.get("height"):
+                    video_meta["height"] = int(s["height"])
+                if s.get("duration"):
+                    video_meta["duration"] = int(float(s["duration"]))
+                break
+    except Exception:
+        pass
+
     # 3. Upload Stage
     # The main renamed video always goes first, and is uploaded on its own so the
     # progress bar tracks it cleanly. It is NOT removed from outputs_to_upload's
@@ -359,6 +383,10 @@ async def execute_processing(client: Client, user_id: int, message: Message):
                 chat_id=message.chat.id,
                 video=file_to_send,
                 caption=f"<b>📄 File Name:</b> <code>{send_name}</code>",
+                thumb=thumb_path if thumb_ok else None,
+                duration=video_meta["duration"],
+                width=video_meta["width"],
+                height=video_meta["height"],
                 progress=progress_bar,
                 progress_args=(
                     "📤 Uploading", status_msg, start_time, task_id, message.from_user,
@@ -371,6 +399,7 @@ async def execute_processing(client: Client, user_id: int, message: Message):
                 chat_id=message.chat.id,
                 video=file_to_send,
                 caption=f"<b>🎬 Sample from:</b> <code>{new_name}</code>",
+                thumb=thumb_path if thumb_ok else None,
                 reply_to_message_id=reply_to_id,
                 progress=progress_bar,
                 progress_args=(
@@ -395,6 +424,9 @@ async def execute_processing(client: Client, user_id: int, message: Message):
 
         if os.path.exists(file_to_send):
             os.remove(file_to_send)
+
+    if thumb_ok and os.path.exists(thumb_path):
+        os.remove(thumb_path)
 
     await status_msg.delete()
     if "menu_message_id" in state:
