@@ -16,7 +16,8 @@ import logging
 import datetime
 
 import psutil
-from pyrogram import Client, filters, enums
+from aiohttp import web
+from pyrogram import Client, filters, enums, idle
 from pyrogram.types import (
     InlineKeyboardMarkup,
     InlineKeyboardButton,
@@ -133,9 +134,9 @@ ABOUT_TXT = """<b>╭────[ ᴍʏ ᴅᴇᴛᴀɪʟs ]────⍟
 
 ├⍟ Mʏ Nᴀᴍᴇ : {}
 
-├⍟ Dᴇᴠᴇʟᴏᴘᴇʀ : <a href='https://t.me/Venuboyy'>ᴠᴇɴᴜʙᴏʏʏ</a> 👨‍💻
+├⍟ Dᴇᴠᴇʟᴏᴘᴇʀ : <a href='https://t.me/{dev_handle}'>{dev_name}</a> 👨‍💻
 
-├⍟ Oᴡɴᴇʀ : <a href='https://t.me/Venuboyy'>ᴠᴇɴᴜʙᴏʏʏ</a> 👑
+├⍟ Oᴡɴᴇʀ : <a href='https://t.me/{owner_handle}'>{owner_name}</a> 👑
 
 ├⍟ Lɪʙʀᴀʀʏ : <a href='https://github.com/pyrogram/pyrogram'>ᴘʏʀᴏɢʀᴀᴍ ᴠ2</a> 📚
 
@@ -298,6 +299,18 @@ def build_final_name(base_name: str, user: dict) -> str:
     return f"{prefix}{name}{suffix}{ext}"
 
 
+def format_about(bot_name: str) -> str:
+    dev_handle = config.DEVELOPER.lstrip("@")
+    owner_handle = getattr(config, "OWNER", config.DEVELOPER).lstrip("@")
+    return ABOUT_TXT.format(
+        bot_name,
+        dev_handle=dev_handle,
+        dev_name=dev_handle,
+        owner_handle=owner_handle,
+        owner_name=owner_handle,
+    )
+
+
 def build_caption(filename: str, size: int, user: dict) -> str:
     template = user.get("caption")
     if template:
@@ -335,7 +348,7 @@ async def about_cmd(client: Client, message: Message):
         return
     me = await client.get_me()
     await message.reply_text(
-        ABOUT_TXT.format(me.first_name), reply_markup=back_home_kb(), disable_web_page_preview=True
+        format_about(me.first_name), reply_markup=back_home_kb(), disable_web_page_preview=True
     )
 
 
@@ -1099,7 +1112,7 @@ async def callback_router(client: Client, cq: CallbackQuery):
 
         elif data == "open_about":
             me = await client.get_me()
-            await cq.message.edit_text(ABOUT_TXT.format(me.first_name), reply_markup=back_home_kb(), disable_web_page_preview=True)
+            await cq.message.edit_text(format_about(me.first_name), reply_markup=back_home_kb(), disable_web_page_preview=True)
 
         elif data == "open_settings":
             u = await db.get_user(user_id)
@@ -1331,9 +1344,45 @@ async def callback_router(client: Client, cq: CallbackQuery):
 
 
 # ======================================================================= #
+# Health check server (for Koyeb / other platforms that require an open
+# HTTP port to consider the service "healthy")
+# ======================================================================= #
+
+HEALTH_CHECK_PORT = int(os.environ.get("PORT", 8000))
+
+
+async def health(request):
+    return web.Response(text="OK")
+
+
+async def start_health_server():
+    web_app = web.Application()
+    web_app.router.add_get("/", health)
+    web_app.router.add_get("/health", health)
+    runner = web.AppRunner(web_app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", HEALTH_CHECK_PORT)
+    await site.start()
+    log.info(f"Health check server running on port {HEALTH_CHECK_PORT}")
+    return runner
+
+
+# ======================================================================= #
 # Entrypoint
 # ======================================================================= #
 
-if __name__ == "__main__":
+async def main():
     log.info("Starting Rename Bot...")
-    app.run()
+    runner = await start_health_server()
+    await app.start()
+    log.info("Bot started.")
+    try:
+        await idle()
+    finally:
+        await app.stop()
+        await runner.cleanup()
+        log.info("Bot stopped.")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
