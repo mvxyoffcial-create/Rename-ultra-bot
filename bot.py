@@ -15,7 +15,7 @@ from aiohttp import web
 import ffmpeg
 import psutil
 from motor.motor_asyncio import AsyncIOMotorClient
-from pyrogram import Client, filters, enums
+from pyrogram import Client, filters, enums, idle
 from pyrogram.types import (
     InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery,
     Message, User, InputMediaPhoto, ForceReply
@@ -1410,7 +1410,7 @@ async def start_web_server():
         await asyncio.sleep(3600)
 
 # -------------------------------------------------------------------
-# Main – with retry logic for FloodWait
+# Main – with retry logic and correct idle usage
 # -------------------------------------------------------------------
 
 async def main():
@@ -1422,7 +1422,7 @@ async def main():
             logger.info("Bot started!")
             break
         except FloodWait as e:
-            wait_time = e.value  # the wait time in seconds
+            wait_time = e.value
             logger.warning(f"FloodWait: need to wait {wait_time} seconds before retrying.")
             await asyncio.sleep(wait_time)
             retries += 1
@@ -1433,11 +1433,11 @@ async def main():
         logger.error("Failed to start after multiple retries.")
         return
 
-    # Start the health‑check web server
+    # Start the health‑check web server in the background
     web_task = asyncio.create_task(start_web_server())
 
-    # Keep the bot running
-    await app.idle()
+    # Idle the bot – blocks until stopped
+    await idle()
 
     # Cleanup
     web_task.cancel()
