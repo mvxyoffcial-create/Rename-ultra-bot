@@ -26,8 +26,11 @@ from pyrogram.enums import ParseMode
 # Configuration
 from config import (
     API_ID, API_HASH, BOT_TOKEN, MONGO_URL,
-    ADMIN_IDS, FORCE_SUB_CHANNELS, PICS_URL, PORT
+    ADMIN_IDS, FORCE_SUB_CHANNELS, PICS_URL
 )
+
+# Port for health check – read from env directly
+PORT = int(os.getenv("PORT", 8000))
 
 # Setup logging
 logging.basicConfig(
@@ -192,24 +195,20 @@ class Progress:
         now = time.time()
         elapsed = now - self.last_update
         if elapsed >= 2.0:  # update every 2 seconds
-            # Calculate speed
             diff = current - self.last_processed
-            self.speed = diff / elapsed  # bytes per second
+            self.speed = diff / elapsed
             self.last_processed = current
             self.last_update = now
-            # ETA
             if self.speed > 0:
                 remaining = total - current
                 eta_sec = remaining / self.speed
                 self.eta = time_formatter(int(eta_sec))
             else:
                 self.eta = "Unknown"
-            # Build progress bar
             percent = (current / total) * 100 if total else 0
             bar_length = 20
             filled = int(bar_length * percent / 100)
             bar = "█" * filled + "░" * (bar_length - filled)
-            # Build message
             filename_trunc = truncate_text(self.filename, 30)
             speed_str = humanbytes(self.speed) + "/s" if self.speed else "0B/s"
             progress_text = (
@@ -309,9 +308,7 @@ async def ffmpeg_compress(input_path: str, output_path: str, crf: int = 28):
 # -------------------------------------------------------------------
 
 async def process_file(message: Message, new_name: str, user_id: int):
-    # Get user settings
     user_data = await get_user_data(user_id)
-    # Apply prefix/suffix
     prefix = user_data.get("prefix", "")
     suffix = user_data.get("suffix", "")
     final_name = new_name
@@ -320,27 +317,22 @@ async def process_file(message: Message, new_name: str, user_id: int):
     if suffix:
         base, ext = os.path.splitext(final_name)
         final_name = base + suffix + ext
-    
-    # Determine output format
+
     input_ext = os.path.splitext(message.document.file_name)[1] if message.document else ""
     output_ext = os.path.splitext(final_name)[1]
     need_conversion = input_ext.lower() != output_ext.lower() if input_ext else False
-    
-    # Download with progress
+
     temp_input = os.path.join(downloads_dir, f"{user_id}_{int(time.time())}_input{input_ext}")
     temp_output = os.path.join(downloads_dir, f"{user_id}_{int(time.time())}_output{output_ext}")
-    
-    # Send processing message
+
     progress_msg = await message.reply_text("⏳ Downloading...")
     progress = Progress(progress_msg, final_name, message.document.file_size, "⬇️")
     try:
-        # Download
         await app.download_media(
             message,
             file_name=temp_input,
             progress=progress_callback(progress)
         )
-        # If conversion needed
         if need_conversion:
             await progress_msg.edit_text("🔄 Converting...")
             if output_ext in ['.mp3', '.aac', '.m4a', '.flac', '.opus']:
@@ -353,19 +345,15 @@ async def process_file(message: Message, new_name: str, user_id: int):
                 await progress_msg.edit_text("❌ Conversion failed!")
                 return
         else:
-            # Simple rename (copy streams)
             success = await ffmpeg_rename(temp_input, temp_output)
             if not success:
-                # Fallback: copy file directly if ffmpeg fails
                 shutil.copy2(temp_input, temp_output)
-        
-        # Apply metadata if set
+
         meta_title = user_data.get("metadata_title")
         meta_artist = user_data.get("metadata_artist")
         meta_album = user_data.get("metadata_album")
         meta_year = user_data.get("metadata_year")
         if any([meta_title, meta_artist, meta_album, meta_year]):
-            # Need to re-encode with metadata? We'll use ffmpeg to set metadata.
             meta_temp = temp_output + "_meta"
             cmd = ["ffmpeg", "-i", temp_output]
             if meta_title:
@@ -382,32 +370,28 @@ async def process_file(message: Message, new_name: str, user_id: int):
                 os.replace(meta_temp, temp_output)
             else:
                 os.remove(meta_temp)
-        
-        # Prepare caption
+
         caption = user_data.get("caption", "")
         if caption:
             caption = caption.replace("{filename}", os.path.basename(final_name))
             caption = caption.replace("{size}", humanbytes(os.path.getsize(temp_output)))
-        
-        # Thumbnail
+
         thumb_path = None
         thumb_file_id = user_data.get("thumbnail")
         if thumb_file_id:
             thumb_path = os.path.join(downloads_dir, f"{user_id}_thumb.jpg")
             await app.download_media(thumb_file_id, file_name=thumb_path)
-        
-        # Upload
+
         await progress_msg.edit_text("⏳ Uploading...")
         upload_progress = Progress(progress_msg, final_name, os.path.getsize(temp_output), "⬆️")
         try:
-            sent = await app.send_document(
+            await app.send_document(
                 chat_id=message.chat.id,
                 document=temp_output,
                 thumb=thumb_path,
                 caption=caption,
                 progress=progress_callback(upload_progress)
             )
-            # Update stats
             await users_col.update_one(
                 {"user_id": user_id},
                 {"$inc": {"total_processed": 1}, "$set": {"last_active": datetime.now()}}
@@ -422,73 +406,12 @@ async def process_file(message: Message, new_name: str, user_id: int):
         logger.error(f"Processing error: {e}")
         await progress_msg.edit_text(f"❌ Error: {str(e)}")
     finally:
-        # Cleanup
         for f in [temp_input, temp_output, thumb_path]:
             if f and os.path.exists(f):
                 try:
                     os.remove(f)
                 except:
                     pass
-
-# -------------------------------------------------------------------
-# Start Command
-# -------------------------------------------------------------------
-
-@app.on_message(filters.command("start") & filters.private)
-async def start_command(client, message: Message):
-    user = message.from_user
-    # Force sub check
-    passed, markup = await check_force_sub(user.id)
-    if not passed:
-        await message.reply_text(
-            "⚠️ You must join our channels to use this bot!",
-            reply_markup=markup
-        )
-        return
-    # Ban check
-    if await is_banned(user.id):
-        await message.reply_text("🚫 You are banned from using this bot.")
-        return
-    # Save user
-    await save_user(user)
-    # Send sticker
-    sticker_id = "CAACAgIAAxkBAAEQZtFpgEdROhGouBVFD3e0K-YjmVHwsgACtCMAAphLKUjeub7NKlvk2TgE"
-    try:
-        sticker_msg = await message.reply_sticker(sticker_id)
-        await asyncio.sleep(2)
-        await sticker_msg.delete()
-    except:
-        pass
-    # Welcome image
-    welcome_img = get_welcome_image()
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(welcome_img) as resp:
-                if resp.status == 200:
-                    img_path = os.path.join(downloads_dir, f"welcome_{user.id}.jpg")
-                    with open(img_path, "wb") as f:
-                        f.write(await resp.read())
-                    await message.reply_photo(
-                        photo=img_path,
-                        caption=START_TXT.format(user.mention),
-                        reply_markup=START_MARKUP
-                    )
-                    os.remove(img_path)
-                else:
-                    fallback = "https://i.ibb.co/pr2H8cwT/img-8312532076.jpg"
-                    await message.reply_photo(
-                        photo=fallback,
-                        caption=START_TXT.format(user.mention),
-                        reply_markup=START_MARKUP
-                    )
-    except Exception as e:
-        logger.error(f"Welcome image error: {e}")
-        fallback = "https://i.ibb.co/pr2H8cwT/img-8312532076.jpg"
-        await message.reply_photo(
-            photo=fallback,
-            caption=START_TXT.format(user.mention),
-            reply_markup=START_MARKUP
-        )
 
 # -------------------------------------------------------------------
 # Text Constants
@@ -611,6 +534,57 @@ HELP_BACK = InlineKeyboardMarkup([
 # Command Handlers
 # -------------------------------------------------------------------
 
+@app.on_message(filters.command("start") & filters.private)
+async def start_command(client, message: Message):
+    user = message.from_user
+    passed, markup = await check_force_sub(user.id)
+    if not passed:
+        await message.reply_text(
+            "⚠️ You must join our channels to use this bot!",
+            reply_markup=markup
+        )
+        return
+    if await is_banned(user.id):
+        await message.reply_text("🚫 You are banned from using this bot.")
+        return
+    await save_user(user)
+    sticker_id = "CAACAgIAAxkBAAEQZtFpgEdROhGouBVFD3e0K-YjmVHwsgACtCMAAphLKUjeub7NKlvk2TgE"
+    try:
+        sticker_msg = await message.reply_sticker(sticker_id)
+        await asyncio.sleep(2)
+        await sticker_msg.delete()
+    except:
+        pass
+    welcome_img = get_welcome_image()
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(welcome_img) as resp:
+                if resp.status == 200:
+                    img_path = os.path.join(downloads_dir, f"welcome_{user.id}.jpg")
+                    with open(img_path, "wb") as f:
+                        f.write(await resp.read())
+                    await message.reply_photo(
+                        photo=img_path,
+                        caption=START_TXT.format(user.mention),
+                        reply_markup=START_MARKUP
+                    )
+                    os.remove(img_path)
+                else:
+                    fallback = "https://i.ibb.co/pr2H8cwT/img-8312532076.jpg"
+                    await message.reply_photo(
+                        photo=fallback,
+                        caption=START_TXT.format(user.mention),
+                        reply_markup=START_MARKUP
+                    )
+    except Exception as e:
+        logger.error(f"Welcome image error: {e}")
+        fallback = "https://i.ibb.co/pr2H8cwT/img-8312532076.jpg"
+        await message.reply_photo(
+            photo=fallback,
+            caption=START_TXT.format(user.mention),
+            reply_markup=START_MARKUP
+        )
+
 @app.on_message(filters.command("help") & filters.private)
 async def help_command(client, message):
     user_id = message.from_user.id
@@ -670,7 +644,6 @@ async def info_command(client, message):
 <b>📊 Bot Usage:</b>
 ➲ <b>Files Processed:</b> {total_processed}
 ➲ <b>Joined:</b> {joined_date}"""
-    # Get profile photo
     photos = await app.get_profile_photos(user.id)
     if photos.total_count > 0:
         photo = photos[0]
@@ -733,10 +706,6 @@ async def settings_command(client, message):
         [InlineKeyboardButton("🏠 Home", callback_data="home")]
     ]
     await message.reply_text(text, reply_markup=InlineKeyboardMarkup(buttons))
-
-# -------------------------------------------------------------------
-# Thumbnail, Metadata, Caption, Prefix, Suffix commands
-# -------------------------------------------------------------------
 
 @app.on_message(filters.command("thumbnail") & filters.private)
 async def set_thumbnail_cmd(client, message):
@@ -1019,13 +988,14 @@ async def unban_command(client, message):
         pass
 
 # -------------------------------------------------------------------
-# File Rename Handler (Documents, Videos, Audio)
+# File Rename Handler
 # -------------------------------------------------------------------
+
+waiting_rename = {}
 
 @app.on_message(filters.document | filters.video | filters.audio)
 async def file_handler(client, message):
     user_id = message.from_user.id
-    # Force sub
     passed, markup = await check_force_sub(user_id)
     if not passed:
         await message.reply_text("⚠️ You must join our channels to use this bot!", reply_markup=markup)
@@ -1033,9 +1003,7 @@ async def file_handler(client, message):
     if await is_banned(user_id):
         await message.reply_text("🚫 You are banned from using this bot.")
         return
-    # Save user
     await save_user(message.from_user)
-    # Get file details
     if message.document:
         file = message.document
         ext = os.path.splitext(file.file_name)[1] if file.file_name else ".bin"
@@ -1051,7 +1019,6 @@ async def file_handler(client, message):
     else:
         await message.reply_text("Unsupported file type.")
         return
-    # Show details
     filename = file.file_name or f"file{ext}"
     size_str = humanbytes(size)
     duration = getattr(file, "duration", None)
@@ -1074,16 +1041,11 @@ Audio: .mp3, .aac, .m4a, .flac, .opus"""
         [InlineKeyboardButton("❌ Cancel", callback_data="cancel_process")]
     ]
     await message.reply_text(text, reply_markup=InlineKeyboardMarkup(buttons))
-    # Wait for reply
-    # We'll use a global dict to store waiting users
     waiting_rename[user_id] = {
         "message": message,
         "filename": filename,
         "file_size": size
     }
-
-# Global waiting dict
-waiting_rename = {}
 
 @app.on_message(filters.text & filters.private)
 async def text_handler(client, message):
@@ -1094,11 +1056,10 @@ async def text_handler(client, message):
         if not new_name:
             await message.reply_text("❌ Invalid filename.")
             return
-        # Process file
         await process_file(data["message"], new_name, user_id)
 
 # -------------------------------------------------------------------
-# Callback Query Handlers
+# Callback Query Handler – ALL buttons fully handled
 # -------------------------------------------------------------------
 
 @app.on_callback_query()
@@ -1106,8 +1067,8 @@ async def callback_handler(client, callback: CallbackQuery):
     data = callback.data
     user_id = callback.from_user.id
     message = callback.message
-    
-    # Force sub check for all callbacks except verify_sub
+
+    # Force sub check for all except verify_sub
     if data != "verify_sub":
         passed, markup = await check_force_sub(user_id)
         if not passed:
@@ -1116,7 +1077,8 @@ async def callback_handler(client, callback: CallbackQuery):
         if await is_banned(user_id):
             await callback.answer("You are banned!", show_alert=True)
             return
-    
+
+    # ---- VERIFY ----
     if data == "verify_sub":
         passed, markup = await check_force_sub(user_id)
         if passed:
@@ -1125,151 +1087,144 @@ async def callback_handler(client, callback: CallbackQuery):
         else:
             await callback.answer("❌ Please join all channels first!", show_alert=True)
         return
-    
+
+    # ---- HOME, HELP, ABOUT, SETTINGS ----
     if data == "home":
-        await callback.message.edit_text(
+        await message.edit_text(
             START_TXT.format(callback.from_user.mention),
             reply_markup=START_MARKUP
         )
         await callback.answer()
         return
-    
+
     if data == "help":
-        await callback.message.edit_text(HELP_TXT, reply_markup=HELP_BACK)
+        await message.edit_text(HELP_TXT, reply_markup=HELP_BACK)
         await callback.answer()
         return
-    
+
     if data == "about":
         bot_info = await app.get_me()
-        await callback.message.edit_text(
+        await message.edit_text(
             ABOUT_TXT.format(bot_info.first_name),
             reply_markup=HELP_BACK,
             disable_web_page_preview=True
         )
         await callback.answer()
         return
-    
+
     if data == "settings":
-        # Re-run settings command logic
         await settings_command(client, message)
         await callback.answer()
         return
-    
-    if data == "set_thumb":
-        await callback.message.reply_text(
-            "🖼️ <b>Please reply to a photo to set as permanent thumbnail.</b>",
-            reply_markup=ForceReply(selective=True)
+
+    # ---- THUMBNAIL, METADATA, CAPTION, PREFIX/SUFFIX ----
+    if data == "thumbnail":
+        await set_thumbnail_cmd(client, message)
+        await callback.answer()
+        return
+
+    if data == "metadata":
+        await set_metadata_cmd(client, message)
+        await callback.answer()
+        return
+
+    if data == "caption":
+        await set_caption_cmd(client, message)
+        await callback.answer()
+        return
+
+    if data == "prefix_suffix":
+        buttons = [
+            [InlineKeyboardButton("🏷️ Set Prefix", callback_data="set_prefix"),
+             InlineKeyboardButton("🏷️ Set Suffix", callback_data="set_suffix")],
+            [InlineKeyboardButton("🏠 Back", callback_data="home")]
+        ]
+        await message.edit_text(
+            "🏷️ <b>Prefix / Suffix Settings</b>\n\nChoose an option:",
+            reply_markup=InlineKeyboardMarkup(buttons)
         )
         await callback.answer()
         return
-    
-    if data == "del_thumb":
-        await update_user_field(user_id, "thumbnail", None)
-        await callback.message.edit_text(
-            "🗑️ <b>Thumbnail removed successfully!</b>",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🖼️ Set New", callback_data="set_thumb"),
-                 InlineKeyboardButton("🏠 Home", callback_data="home")]
-            ])
-        )
-        await callback.answer()
-        return
-    
-    if data == "set_meta":
-        await callback.message.reply_text(
-            "📋 <b>Send metadata in format:</b>\n\n<code>Title | Artist | Album | Year</code>\n\nExample: <code>My Video | John Doe | My Album | 2024</code>",
-            reply_markup=ForceReply(selective=True)
-        )
-        await callback.answer()
-        return
-    
-    if data == "del_meta":
-        await update_user_field(user_id, "metadata_title", None)
-        await update_user_field(user_id, "metadata_artist", None)
-        await update_user_field(user_id, "metadata_album", None)
-        await update_user_field(user_id, "metadata_year", None)
-        await callback.message.edit_text(
-            "🗑️ <b>Metadata removed!</b>",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("📋 Set New", callback_data="set_meta"),
-                 InlineKeyboardButton("🏠 Home", callback_data="home")]
-            ])
-        )
-        await callback.answer()
-        return
-    
-    if data == "set_caption":
-        await callback.message.reply_text(
-            "✍️ <b>Send your permanent caption text</b>\n\nYou can use:\n• <code>{filename}</code> - for file name\n• <code>{size}</code> - for file size\n• HTML formatting allowed",
-            reply_markup=ForceReply(selective=True)
-        )
-        await callback.answer()
-        return
-    
-    if data == "del_caption":
-        await update_user_field(user_id, "caption", None)
-        await callback.message.edit_text(
-            "🗑️ <b>Caption removed!</b>",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("✍️ Set New", callback_data="set_caption"),
-                 InlineKeyboardButton("🏠 Home", callback_data="home")]
-            ])
-        )
-        await callback.answer()
-        return
-    
+
     if data == "set_prefix":
-        await callback.message.reply_text(
-            "🏷️ <b>Send prefix text to add BEFORE filename</b>\n\nExample: <code>[TeamName]_</code>\nResult: <code>[TeamName]_filename.mkv</code>",
-            reply_markup=ForceReply(selective=True)
-        )
+        await set_prefix_cmd(client, message)
         await callback.answer()
         return
-    
+
     if data == "set_suffix":
-        await callback.message.reply_text(
-            "🏷️ <b>Send suffix text to add AFTER filename</b>\n\nExample: <code>@TeamName</code>\nResult: <code>filename@TeamName.mkv</code>",
+        await set_suffix_cmd(client, message)
+        await callback.answer()
+        return
+
+    # ---- STATS ----
+    if data == "stats":
+        await stats_command(client, message)
+        await callback.answer()
+        return
+
+    # ---- SCREENSHOT, AUDIO TOOLS, SUBTITLE, COMPRESS ----
+    if data == "screenshot":
+        await message.reply_text(
+            "📸 <b>Screenshot Generator</b>\n\nSend a video file or reply to a video with the timestamp (e.g., 00:01:30).",
             reply_markup=ForceReply(selective=True)
         )
         await callback.answer()
         return
-    
-    if data == "refresh_ping":
-        start = time.time()
-        await callback.answer("Refreshing...")
-        end = time.time()
-        ping = int((end - start) * 1000)
-        await callback.message.edit_text(
-            f"<b>🏓 ᴘᴏɴɢ!</b>\n\n"
-            f"<b>⏱️ Response Time:</b> <code>{ping}ms</code>\n"
-            f"<b>📡 Bot Uptime:</b> <code>{get_uptime()}</code>\n"
-            f"<b>⚡ Workers:</b> <code>500</code>\n"
-            f"<b>🗄️ Database:</b> <code>Connected ✅</code>",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔄 Refresh", callback_data="refresh_ping"),
-                 InlineKeyboardButton("🏠 Home", callback_data="home")]
-            ])
+
+    if data == "audio_tools":
+        buttons = [
+            [InlineKeyboardButton("🎵 Extract Audio", callback_data="audio_extract"),
+             InlineKeyboardButton("🔇 Remove Audio", callback_data="audio_remove")],
+            [InlineKeyboardButton("🏠 Back", callback_data="home")]
+        ]
+        await message.edit_text(
+            "🎵 <b>Audio Tools</b>\n\nSelect operation:",
+            reply_markup=InlineKeyboardMarkup(buttons)
         )
-        return
-    
-    if data == "refresh_stats":
-        await stats_command(client, callback.message)
         await callback.answer()
         return
-    
-    if data == "refresh_info":
-        await info_command(client, callback.message)
+
+    if data == "subtitle":
+        buttons = [
+            [InlineKeyboardButton("📋 Extract Subtitles", callback_data="sub_extract"),
+             InlineKeyboardButton("🗑️ Remove Subtitles", callback_data="sub_remove")],
+            [InlineKeyboardButton("🏠 Back", callback_data="home")]
+        ]
+        await message.edit_text(
+            "📋 <b>Subtitle Tools</b>\n\nSelect operation:",
+            reply_markup=InlineKeyboardMarkup(buttons)
+        )
         await callback.answer()
         return
-    
-    if data == "broadcast":
-        await callback.message.reply_text(
-            "📨 <b>Send message to broadcast:</b>\n\nSend any text, photo, video, or document",
+
+    if data == "compress":
+        await message.reply_text(
+            "🗜️ <b>Compression</b>\n\nSend a video file or reply with the target CRF value (e.g., 28).",
             reply_markup=ForceReply(selective=True)
         )
         await callback.answer()
         return
-    
+
+    # ---- RENAME / BATCH RENAME ----
+    if data == "rename":
+        await message.reply_text(
+            "📝 <b>How to rename</b>\n\n1. Send me any file (video, audio, document).\n"
+            "2. Reply to that file with the new name including extension.\n"
+            "Example: `My New Video.mkv`"
+        )
+        await callback.answer()
+        return
+
+    if data == "batch":
+        await message.reply_text(
+            "📦 <b>Batch Rename</b>\n\nSend multiple files (as a group) and then reply with:\n"
+            "• `New Name` – all files will be renamed sequentially.\n"
+            "• `New Name {n}` – replaces `{n}` with the file number."
+        )
+        await callback.answer()
+        return
+
+    # ---- MEDIA TOOLS SUBMENU ----
     if data == "media_tools":
         buttons = [
             [InlineKeyboardButton("📤 Stream Extract", callback_data="stream_extract"),
@@ -1282,13 +1237,24 @@ async def callback_handler(client, callback: CallbackQuery):
              InlineKeyboardButton("✂️ Sample Video", callback_data="sample_video")],
             [InlineKeyboardButton("🏠 Back", callback_data="home")]
         ]
-        await callback.message.edit_text(
+        await message.edit_text(
             "<b>🎬 Media Tools</b>\n\nSelect operation:",
             reply_markup=InlineKeyboardMarkup(buttons)
         )
         await callback.answer()
         return
-    
+
+    # ---- SPECIFIC MEDIA TOOLS (sub‑buttons) ----
+    if data in ("stream_extract", "stream_remove", "audio_extract", "audio_remove",
+                "sub_extract", "sub_remove", "sample_video"):
+        await callback.message.reply_text(
+            f"🛠️ <b>{data.replace('_', ' ').title()}</b>\n\nPlease send the file you want to process.",
+            reply_markup=ForceReply(selective=True)
+        )
+        await callback.answer()
+        return
+
+    # ---- CONVERSION ----
     if data == "convert":
         buttons = [
             [InlineKeyboardButton("MP4", callback_data="convert_mp4"),
@@ -1304,24 +1270,125 @@ async def callback_handler(client, callback: CallbackQuery):
              InlineKeyboardButton("OPUS", callback_data="convert_opus")],
             [InlineKeyboardButton("🏠 Back", callback_data="home")]
         ]
-        await callback.message.edit_text(
-            "<b>🔄 Format Conversion</b>\n\n<b>🎬 Video Formats:</b>\n<b>🎵 Audio Formats:</b>",
+        await message.edit_text(
+            "<b>🔄 Format Conversion</b>\n\nChoose a target format:",
             reply_markup=InlineKeyboardMarkup(buttons)
         )
         await callback.answer()
         return
-    
-    # Conversion callbacks and other tools will be handled similarly.
+
     if data.startswith("convert_"):
         fmt = data.split("_")[1]
         await callback.message.reply_text(
-            f"🔄 <b>Convert to .{fmt}</b>\n\nPlease send the file you want to convert or reply to an existing file.",
+            f"🔄 <b>Convert to .{fmt}</b>\n\nPlease send the file to convert.",
             reply_markup=ForceReply(selective=True)
         )
         await callback.answer()
         return
-    
-    # More handlers can be added for other tools...
+
+    # ---- REFRESH / BROADCAST ----
+    if data == "refresh_ping":
+        start = time.time()
+        await callback.answer("Refreshing...")
+        end = time.time()
+        ping = int((end - start) * 1000)
+        await message.edit_text(
+            f"<b>🏓 ᴘᴏɴɢ!</b>\n\n"
+            f"<b>⏱️ Response Time:</b> <code>{ping}ms</code>\n"
+            f"<b>📡 Bot Uptime:</b> <code>{get_uptime()}</code>\n"
+            f"<b>⚡ Workers:</b> <code>500</code>\n"
+            f"<b>🗄️ Database:</b> <code>Connected ✅</code>",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔄 Refresh", callback_data="refresh_ping"),
+                 InlineKeyboardButton("🏠 Home", callback_data="home")]
+            ])
+        )
+        return
+
+    if data == "refresh_stats":
+        await stats_command(client, message)
+        await callback.answer()
+        return
+
+    if data == "refresh_info":
+        await info_command(client, message)
+        await callback.answer()
+        return
+
+    if data == "broadcast":
+        await callback.message.reply_text(
+            "📨 <b>Send message to broadcast:</b>\n\nSend any text, photo, video, or document",
+            reply_markup=ForceReply(selective=True)
+        )
+        await callback.answer()
+        return
+
+    # ---- SET / DEL THUMB, META, CAPTION (already have handlers) ----
+    if data == "set_thumb":
+        await callback.message.reply_text(
+            "🖼️ <b>Please reply to a photo to set as permanent thumbnail.</b>",
+            reply_markup=ForceReply(selective=True)
+        )
+        await callback.answer()
+        return
+
+    if data == "del_thumb":
+        await update_user_field(user_id, "thumbnail", None)
+        await message.edit_text(
+            "🗑️ <b>Thumbnail removed successfully!</b>",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🖼️ Set New", callback_data="set_thumb"),
+                 InlineKeyboardButton("🏠 Home", callback_data="home")]
+            ])
+        )
+        await callback.answer()
+        return
+
+    if data == "set_meta":
+        await callback.message.reply_text(
+            "📋 <b>Send metadata in format:</b>\n\n<code>Title | Artist | Album | Year</code>\n\nExample: <code>My Video | John Doe | My Album | 2024</code>",
+            reply_markup=ForceReply(selective=True)
+        )
+        await callback.answer()
+        return
+
+    if data == "del_meta":
+        await update_user_field(user_id, "metadata_title", None)
+        await update_user_field(user_id, "metadata_artist", None)
+        await update_user_field(user_id, "metadata_album", None)
+        await update_user_field(user_id, "metadata_year", None)
+        await message.edit_text(
+            "🗑️ <b>Metadata removed!</b>",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("📋 Set New", callback_data="set_meta"),
+                 InlineKeyboardButton("🏠 Home", callback_data="home")]
+            ])
+        )
+        await callback.answer()
+        return
+
+    if data == "set_caption":
+        await callback.message.reply_text(
+            "✍️ <b>Send your permanent caption text</b>\n\nYou can use:\n• <code>{filename}</code> - for file name\n• <code>{size}</code> - for file size\n• HTML formatting allowed",
+            reply_markup=ForceReply(selective=True)
+        )
+        await callback.answer()
+        return
+
+    if data == "del_caption":
+        await update_user_field(user_id, "caption", None)
+        await message.edit_text(
+            "🗑️ <b>Caption removed!</b>",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("✍️ Set New", callback_data="set_caption"),
+                 InlineKeyboardButton("🏠 Home", callback_data="home")]
+            ])
+        )
+        await callback.answer()
+        return
+
+    # ---- FALLBACK (if no handler matched) ----
+    await callback.answer("⏳ This feature is being developed.", show_alert=True)
 
 # -------------------------------------------------------------------
 # Health Check Web Server
@@ -1339,7 +1406,6 @@ async def start_web_server():
     site = web.TCPSite(runner, "0.0.0.0", PORT)
     await site.start()
     logger.info(f"Web server started on port {PORT}")
-    # Keep the server running forever (it runs in background)
     while True:
         await asyncio.sleep(3600)
 
@@ -1348,14 +1414,10 @@ async def start_web_server():
 # -------------------------------------------------------------------
 
 async def main():
-    # Start bot
     await app.start()
     logger.info("Bot started!")
-    # Start web server in background
     web_task = asyncio.create_task(start_web_server())
-    # Keep bot running
     await app.idle()
-    # Cleanup
     web_task.cancel()
 
 if __name__ == "__main__":
