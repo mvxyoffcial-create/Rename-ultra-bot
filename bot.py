@@ -52,19 +52,17 @@ bot = Client(
 
 BOT_START_TIME = time.time()
 CANCEL_TASKS = set()
+TASK_QUEUE_COUNT = 9 
 
-# State Management Caches
-USER_STATES = {}  # {user_id: {"step": ..., "file_msg": ..., "new_name": ..., "tools": set(), "stream_selections": set()}}
+USER_STATES = {}
 
 AVAILABLE_TOOLS = {
-    "rem_stream": "Stream Remove",
-    "ext_stream": "Stream Extract",
-    "ext_audio": "Audio Extract",
-    "rem_audio": "Audio Remove",
-    "ext_sub": "Subtitle Extract",
-    "rem_sub": "Subtitle Remove",
-    "screenshot": "Screenshot",
-    "sample": "Sample Video"
+    "rem_stream": "❌ Stream Remove",
+    "ext_stream": "📤 Stream Extract",
+    "ext_audio": "🎵 Extract Audio",
+    "ext_sub": "💬 Extract Subtitle",
+    "screenshot": "📸 Take Screenshot",
+    "sample": "🎞️ Sample Video"
 }
 
 def humanbytes(size):
@@ -83,14 +81,14 @@ def time_formatter(milliseconds: int) -> str:
     minutes, seconds = divmod(seconds, 60)
     hours, minutes = divmod(minutes, 60)
     days, hours = divmod(hours, 24)
-    tmp = ((f"{days}d, " if days else "") +
-           (f"{hours}h, " if hours else "") +
-           (f"{minutes}m, " if minutes else "") +
-           (f"{seconds}s, " if seconds else ""))
-    return tmp[:-2] if tmp else "0s"
+    tmp = ((f"{days}d " if days else "") +
+           (f"{hours}h " if hours else "") +
+           (f"{minutes}m " if minutes else "") +
+           (f"{seconds}s" if seconds else ""))
+    return tmp if tmp else "0s"
 
 def get_random_id():
-    return ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
+    return ''.join(random.choices(string.ascii_lowercase + string.digits, k=12))
 
 async def handle_koyeb_healthcheck(request):
     return web.Response(text="Bot Active", status=200)
@@ -103,7 +101,8 @@ async def start_web_server():
     site = web.TCPSite(runner, "0.0.0.0", config.PORT)
     await site.start()
 
-async def progress_for_pyrogram(current, total, ud_type, message, start, task_id):
+# Customized UI matching target layout
+async def progress_for_pyrogram(current, total, ud_type, message, start, task_id, filename, user_name, user_id):
     if task_id in CANCEL_TASKS:
         bot.stop_transmission()
         return
@@ -114,36 +113,41 @@ async def progress_for_pyrogram(current, total, ud_type, message, start, task_id
         return
 
     if round(diff % 2.00) == 0 or current == total:
-        percentage = current * 100 / total
-        speed = current / diff
-        time_to_completion = round((total - current) / speed) * 1000
+        percentage = (current * 100 / total) if total > 0 else 0
+        speed = current / diff if diff > 0 else 0
+        elapsed_sec = round(diff)
+        time_to_completion = round((total - current) / speed) * 1000 if speed > 0 else 0
 
-        progress = "[{0}{1}]".format(
-            ''.join(["█" for _ in range(math.floor(percentage / 5))]),
-            ''.join(["░" for _ in range(20 - math.floor(percentage / 5))])
-        )
+        # Custom progress bar blocks
+        filled_length = math.floor(percentage / 8.33) # 12 blocks length
+        progress_bar = f"[{'█' * filled_length}{'░' * (12 - filled_length)}]"
 
         tmp = (
-            f"╔════════════════════════════════════╗\n"
-            f"║ 📁 {ud_type}\n"
-            f"║ {progress} {round(percentage, 2)}%\n"
-            f"║ ⚡ Speed: {humanbytes(speed)}/s\n"
-            f"║ 📦 {humanbytes(current)} / {humanbytes(total)}\n"
-            f"║ ⏳ ETA: {time_formatter(time_to_completion)}\n"
-            f"╚════════════════════════════════════╝"
+            f"<b>Task Running: {TASK_QUEUE_COUNT}/20 ❞</b>\n\n"
+            f"<b>1.{ud_type}:</b>\n"
+            f"{progress_bar} {round(percentage)}%\n"
+            f"<b>Processed:</b> {humanbytes(current)}\n"
+            f"<b>Size:</b> {humanbytes(total)}\n"
+            f"<b>Speed:</b> {humanbytes(speed)}/s\n"
+            f"<b>ETA:</b> {time_formatter(time_to_completion) if current != total else '0s'}\n"
+            f"<b>Elapsed:</b> {elapsed_sec}s\n"
+            f"<b>Upload:</b> Telegram\n"
+            f"<b>Engine:</b> Pyrogram v2.0\n"
+            f"<b>{user_name}</b> (<code>{user_id}</code>)\n"
+            f"/stop_{task_id}"
         )
         try:
             await message.edit(
                 text=tmp,
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("❌ Cancel", callback_data=f"cancel_{task_id}")]
+                    [InlineKeyboardButton("🔄 Refresh", callback_data=f"refresh_prog_{task_id}")]
                 ])
             )
         except Exception:
             pass
 
 async def probe_media_streams(file_path):
-    """Analyzes video using ffprobe to retrieve stream details."""
+    """Retrieves all internal streams/tracks via ffprobe."""
     cmd = [
         "ffprobe", "-v", "quiet",
         "-print_format", "json",
@@ -191,11 +195,17 @@ def build_streams_keyboard(streams, selected_streams):
 @bot.on_message(filters.command("start"))
 async def start_cmd(client: Client, message: Message):
     await message.reply(
-        "<b>👋 Welcome to the Interactive Media Editor Bot!</b>\n\n"
-        "Send any video or media file to start!"
+        "<b>👋 Welcome to Interactive Media Editor Bot!</b>\n\n"
+        "Send any video or file to begin."
     )
 
-# STEP 1: User sends a file -> Bot asks for New Name
+@bot.on_message(filters.private & filters.regex(r"^/stop_"))
+async def stop_task_cmd(client: Client, message: Message):
+    task_id = message.text.replace("/stop_", "").strip()
+    CANCEL_TASKS.add(task_id)
+    await message.reply(f"🛑 Cancel request received for task <code>{task_id}</code>.")
+
+# STEP 1: Receive File -> Ask for New Name
 @bot.on_message(filters.private & (filters.document | filters.video | filters.audio))
 async def on_file_receive(client: Client, message: Message):
     user_id = message.from_user.id
@@ -217,22 +227,22 @@ async def on_file_receive(client: Client, message: Message):
         f"📝 <b>Please reply with the NEW NAME for this file:</b>"
     )
 
-# STEP 2: User provides New Name -> Bot shows Media Tools with Checkmarks
-@bot.on_message(filters.private & filters.text & ~filters.command(["start"]))
+# STEP 2: Receive New Name -> Show Checkmark Tool Selector
+@bot.on_message(filters.private & filters.text & ~filters.command(["start"]) & ~filters.regex(r"^/stop_"))
 async def on_text_receive(client: Client, message: Message):
     user_id = message.from_user.id
     state = USER_STATES.get(user_id)
 
     if not state or state.get("step") != "AWAITING_NAME":
-        return await message.reply("Please send a file or video first!")
+        return await message.reply("Please send a video or media file first!")
 
     state["new_name"] = message.text.strip()
     state["step"] = "SELECTING_TOOLS"
 
     await message.reply(
-        f"✅ <b>New Name Set:</b> <code>{state['new_name']}</code>\n\n"
-        f"🛠️ <b>Select the Media Tool operations you want to apply:</b>\n"
-        f"<i>(Tap buttons to checkmark ✅ what you need, then click DONE)</i>",
+        f"✏️ <b>New Name Set:</b> <code>{state['new_name']}</code>\n\n"
+        f"🛠️ <b>Select the actions/tools you need:</b>\n"
+        f"<i>(Tap options to toggle checkmark ✅, then click DONE)</i>",
         reply_markup=build_tools_keyboard(state["tools"])
     )
 
@@ -255,15 +265,31 @@ async def on_callback(client: Client, query: CallbackQuery):
 
     elif data == "tools_done" and state:
         if not state["tools"]:
-            await query.answer("Please select at least one tool or operation!", show_alert=True)
+            await query.answer("Please select at least one operation!", show_alert=True)
             return
 
         state["step"] = "DOWNLOADING"
-        status_msg = await query.message.edit_text("⏳ <b>Downloading video to analyze media streams...</b>")
-
         task_id = get_random_id()
-        input_path = os.path.join(config.DOWNLOAD_DIR, f"{task_id}_input.mkv")
         state["task_id"] = task_id
+
+        user_name = query.from_user.first_name or "User"
+        
+        status_msg = await query.message.edit_text(
+            f"<b>Task Running: {TASK_QUEUE_COUNT}/20 ❞</b>\n\n"
+            f"<b>1.Download:</b>\n"
+            f"[░░░░░░░░░░░░] 0%\n"
+            f"<b>Processed:</b> 0B\n"
+            f"<b>Size:</b> 0B\n"
+            f"<b>Speed:</b> 0B/s\n"
+            f"<b>ETA:</b> -\n"
+            f"<b>Elapsed:</b> 0s\n"
+            f"<b>Upload:</b> Telegram\n"
+            f"<b>Engine:</b> Pyrogram v2.0\n"
+            f"<b>{user_name}</b> (<code>{user_id}</code>)\n"
+            f"/stop_{task_id}"
+        )
+
+        input_path = os.path.join(config.DOWNLOAD_DIR, f"{task_id}_input.mkv")
         state["input_path"] = input_path
 
         try:
@@ -272,23 +298,22 @@ async def on_callback(client: Client, query: CallbackQuery):
                 message=state["file_msg"],
                 file_name=input_path,
                 progress=progress_for_pyrogram,
-                progress_args=("Downloading...", status_msg, start_time, task_id)
+                progress_args=("Download", status_msg, start_time, task_id, state["new_name"], user_name, user_id)
             )
 
             state["dl_path"] = dl_path
             streams = await probe_media_streams(dl_path)
             state["streams"] = streams
 
-            # STEP 3: Check if Stream Remove / Extract was chosen -> Show Stream List
             if "rem_stream" in state["tools"] or "ext_stream" in state["tools"]:
                 state["step"] = "SELECTING_STREAMS"
                 await status_msg.edit(
-                    "🎬 <b>Select the Streams/Tracks to act upon:</b>\n"
-                    "<i>(Select stream index checkmarks and click Process & Upload)</i>",
+                    "🎬 <b>Detected Tracks inside video:</b>\n"
+                    "<i>Select checkmarks for streams to remove or extract, then tap Process & Upload!</i>",
                     reply_markup=build_streams_keyboard(streams, state["selected_streams"])
                 )
             else:
-                await process_and_upload(client, query.message, user_id)
+                await process_and_upload(client, status_msg, user_id)
 
         except Exception as e:
             logger.error(f"Download Error: {e}")
@@ -306,10 +331,10 @@ async def on_callback(client: Client, query: CallbackQuery):
     elif data == "streams_done" and state:
         await process_and_upload(client, query.message, user_id)
 
-    elif data.startswith("cancel_"):
-        task_id = data.split("_")[1]
-        CANCEL_TASKS.add(task_id)
+    elif data.startswith("refresh_prog_"):
+        await query.answer("Progress Refreshed!", show_alert=False)
 
+# Processing Engine
 async def process_and_upload(client: Client, status_msg: Message, user_id: int):
     state = USER_STATES.get(user_id)
     if not state:
@@ -317,61 +342,111 @@ async def process_and_upload(client: Client, status_msg: Message, user_id: int):
 
     dl_path = state["dl_path"]
     new_name = state["new_name"]
-    output_path = os.path.join(config.DOWNLOAD_DIR, new_name)
+    base_name, ext = os.path.splitext(new_name)
+    if not ext:
+        ext = ".mkv"
     task_id = state["task_id"]
 
-    await status_msg.edit("⚙️ <b>Processing FFmpeg operations...</b>")
+    user_name = status_msg.chat.first_name or "User"
+
+    output_files = [] # Stores file paths to upload
 
     try:
         async with ffmpeg_semaphore:
-            cmd = ["ffmpeg", "-y", "-i", dl_path]
+            # 1. Take Screenshot
+            if "screenshot" in state["tools"]:
+                ss_out_path = os.path.join(config.DOWNLOAD_DIR, f"{base_name}_screenshot.jpg")
+                cmd_ss = ["ffmpeg", "-y", "-ss", "00:02:00", "-i", dl_path, "-vframes", "1", "-q:v", "2", ss_out_path]
+                proc_ss = await asyncio.create_subprocess_exec(*cmd_ss, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                await proc_ss.communicate()
+                if os.path.exists(ss_out_path) and os.path.getsize(ss_out_path) > 0:
+                    output_files.append(ss_out_path)
 
-            # Handle Stream Removals
+            # 2. Generate Sample Video (30 seconds clip)
+            if "sample" in state["tools"]:
+                sample_out_path = os.path.join(config.DOWNLOAD_DIR, f"{base_name}_sample{ext}")
+                cmd_sample = ["ffmpeg", "-y", "-ss", "00:01:00", "-i", dl_path, "-t", "30", "-c", "copy", sample_out_path]
+                proc_sample = await asyncio.create_subprocess_exec(*cmd_sample, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                await proc_sample.communicate()
+                if os.path.exists(sample_out_path) and os.path.getsize(sample_out_path) > 0:
+                    output_files.append(sample_out_path)
+
+            # 3. Extract Subtitle
+            if "ext_sub" in state["tools"]:
+                sub_out_path = os.path.join(config.DOWNLOAD_DIR, f"{base_name}.srt")
+                cmd_sub = ["ffmpeg", "-y", "-i", dl_path, "-map", "0:s:0?", sub_out_path]
+                proc_sub = await asyncio.create_subprocess_exec(*cmd_sub, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                await proc_sub.communicate()
+                if os.path.exists(sub_out_path) and os.path.getsize(sub_out_path) > 0:
+                    output_files.append(sub_out_path)
+
+            # 4. Extract Audio
+            if "ext_audio" in state["tools"]:
+                audio_out_path = os.path.join(config.DOWNLOAD_DIR, f"{base_name}.mp3")
+                cmd_aud = ["ffmpeg", "-y", "-i", dl_path, "-vn", "-acodec", "libmp3lame", audio_out_path]
+                proc_aud = await asyncio.create_subprocess_exec(*cmd_aud, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                await proc_aud.communicate()
+                if os.path.exists(audio_out_path) and os.path.getsize(audio_out_path) > 0:
+                    output_files.append(audio_out_path)
+
+            # 5. Main Media Video Output Processing
+            main_output_path = os.path.join(config.DOWNLOAD_DIR, f"{base_name}{ext}")
+            cmd_main = ["ffmpeg", "-y", "-i", dl_path]
+
             if "rem_stream" in state["tools"] and state["selected_streams"]:
-                cmd.extend(["-map", "0"])
+                cmd_main.extend(["-map", "0"])
                 for s_idx in state["selected_streams"]:
-                    cmd.extend(["-map", f"-0:{s_idx}"])
-                cmd.extend(["-c", "copy"])
+                    cmd_main.extend(["-map", f"-0:{s_idx}"])
+                cmd_main.extend(["-c", "copy"])
+            elif "ext_stream" in state["tools"] and state["selected_streams"]:
+                for s_idx in state["selected_streams"]:
+                    cmd_main.extend(["-map", f"0:{s_idx}"])
+                cmd_main.extend(["-c", "copy"])
             else:
-                cmd.extend(["-c", "copy"])
+                cmd_main.extend(["-c", "copy"])
 
-            cmd.append(output_path)
+            cmd_main.append(main_output_path)
 
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
+            proc_main = await asyncio.create_subprocess_exec(*cmd_main, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            await proc_main.communicate()
+
+            if os.path.exists(main_output_path) and os.path.getsize(main_output_path) > 0:
+                output_files.append(main_output_path)
+
+        # 6. Upload All Processed File(s)
+        for target_file in output_files:
+            target_filename = os.path.basename(target_file)
+            upload_start = time.time()
+
+            await client.send_document(
+                chat_id=status_msg.chat.id,
+                document=target_file,
+                caption=f"<b>{target_filename}</b>",
+                progress=progress_for_pyrogram,
+                progress_args=("Upload", status_msg, upload_start, task_id, target_filename, user_name, user_id)
             )
-            await proc.communicate()
-
-        await status_msg.edit("⚡ <b>Uploading processed file...</b>")
-        start_time = time.time()
-
-        await client.send_document(
-            chat_id=status_msg.chat.id,
-            document=output_path,
-            caption=f"<b>{new_name}</b>",
-            progress=progress_for_pyrogram,
-            progress_args=("Uploading...", status_msg, start_time, task_id)
-        )
 
         await status_msg.delete()
 
     except Exception as e:
+        logger.error(f"Processing Error: {e}")
         await status_msg.edit(f"❌ <b>Processing Failed:</b> <code>{str(e)}</code>")
 
     finally:
         USER_STATES.pop(user_id, None)
         CANCEL_TASKS.discard(task_id)
-        for target in [dl_path, output_path]:
-            if os.path.exists(target):
-                try: os.remove(target)
+        if os.path.exists(dl_path):
+            try: os.remove(dl_path)
+            except Exception: pass
+        for f in output_files:
+            if os.path.exists(f):
+                try: os.remove(f)
                 except Exception: pass
 
 async def main():
     await start_web_server()
     await bot.start()
-    logger.info("Interactive Media Bot running.")
+    logger.info("Bot running with full screenshot, sample video & subtitle extract tools.")
     await asyncio.Event().wait()
 
 if __name__ == "__main__":
