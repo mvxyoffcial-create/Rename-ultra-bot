@@ -11,9 +11,6 @@ MONGO_URL = "mongodb+srv://filmzi2120_db_user:zero8907@cluster0.zyau0re.mongodb.
 ADMIN_IDS = [8498741978]
 FORCE_SUB_CHANNELS = ["spideyoffcail", "mvxyoffcail"]
 
-PICS_URL = [
-    "https://api.aniwallpaper.workers.dev/random?type=girl"
-]
-FALLBACK_PIC = "https://i.ibb.co/pr2H8cwT/img-8312532076.jpg"
-START_STICKER = "CAACAgIAAxkBAAEQZtFpgEdROhGouBVFD3e0K-YjmVHwsgACtCMAAphLKUjeub7NKlvk2TgE"
 
+PORT = "8000"
+DOWNLOAD_DIR = "./downloads/"
