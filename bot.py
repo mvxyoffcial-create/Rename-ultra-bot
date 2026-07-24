@@ -1059,7 +1059,7 @@ async def text_handler(client, message):
         await process_file(data["message"], new_name, user_id)
 
 # -------------------------------------------------------------------
-# Callback Query Handler – ALL buttons fully handled
+# Callback Query Handler
 # -------------------------------------------------------------------
 
 @app.on_callback_query()
@@ -1387,7 +1387,7 @@ async def callback_handler(client, callback: CallbackQuery):
         await callback.answer()
         return
 
-    # ---- FALLBACK (if no handler matched) ----
+    # ---- FALLBACK ----
     await callback.answer("⏳ This feature is being developed.", show_alert=True)
 
 # -------------------------------------------------------------------
@@ -1410,15 +1410,38 @@ async def start_web_server():
         await asyncio.sleep(3600)
 
 # -------------------------------------------------------------------
-# Main
+# Main – with retry logic for FloodWait
 # -------------------------------------------------------------------
 
 async def main():
-    await app.start()
-    logger.info("Bot started!")
+    retries = 0
+    max_retries = 5
+    while retries < max_retries:
+        try:
+            await app.start()
+            logger.info("Bot started!")
+            break
+        except FloodWait as e:
+            wait_time = e.value  # the wait time in seconds
+            logger.warning(f"FloodWait: need to wait {wait_time} seconds before retrying.")
+            await asyncio.sleep(wait_time)
+            retries += 1
+        except Exception as e:
+            logger.error(f"Startup error: {e}")
+            raise
+    else:
+        logger.error("Failed to start after multiple retries.")
+        return
+
+    # Start the health‑check web server
     web_task = asyncio.create_task(start_web_server())
+
+    # Keep the bot running
     await app.idle()
+
+    # Cleanup
     web_task.cancel()
+    await app.stop()
 
 if __name__ == "__main__":
-    app.run()
+    asyncio.run(main())
