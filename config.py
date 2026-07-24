@@ -3,14 +3,21 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-API_ID = 36282056
-API_HASH = "3a948acece533f362b4c90b2b3c14b60"
-BOT_TOKEN = "8285873350:AAHVx971B_3r-lJM804MkH288qqjMWHq_CI"
-MONGO_URL = "mongodb+srv://filmzi2120_db_user:zero8907@cluster0.zyau0re.mongodb.net/?appName=Cluster0"
-
-ADMIN_IDS = [8498741978]
-FORCE_SUB_CHANNELS = ["spideyoffcail", "mvxyoffcail"]
-
-
-PORT = "8000"
-DOWNLOAD_DIR = "./downloads/"
+class Config:
+    API_ID = int(os.environ.get("API_ID", "123456"))
+    API_HASH = os.environ.get("API_HASH", "your_api_hash")
+    BOT_TOKEN = os.environ.get("BOT_TOKEN", "your_bot_token")
+    
+    MONGO_URI = os.environ.get("MONGO_URI", "mongodb://localhost:27017")
+    DATABASE_NAME = os.environ.get("DATABASE_NAME", "videobot_db")
+    
+    OWNER_ID = int(os.environ.get("OWNER_ID", "123456789"))
+    FORCE_SUB_CHANNELS = os.environ.get("FORCE_SUB_CHANNELS", "spideyoffcail,mvxyoffcail").split(",")
+    
+    PORT = int(os.environ.get("PORT", "8000"))
+    WORKERS = int(os.environ.get("WORKERS", "500"))
+    
+    DOWNLOAD_DIR = os.environ.get("DOWNLOAD_DIR", "./downloads")
+    
+    STICKER_ID = "CAACAgIAAxkBAAEQZtFpgEdROhGouBVFD3e0K-YjmVHwsgACtCMAAphLKUjeub7NKlvk2TgE"
+    PICS_URL = ["https://api.aniwallpaper.workers.dev/random?type=girl"]
