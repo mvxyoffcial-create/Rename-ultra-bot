@@ -3,8 +3,12 @@ import psutil
 import random
 import string
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message
-from pyrogram.errors import UserNotParticipant, MessageNotModified
+from pyrogram.errors import UserNotParticipant, MessageNotModified, FloodWait
 from config import Config
+
+# Cache to store last update times and progress states
+LAST_UPDATE_TIME = {}
+PROGRESS_CACHE = {}
 
 def get_random_mix_id(length=8):
     return ''.join(random.choices(string.ascii_lowercase + string.digits, k=length))
@@ -23,7 +27,7 @@ def humanbytes(size):
 def time_formatter(milliseconds: int) -> str:
     seconds, milliseconds = divmod(int(milliseconds), 1000)
     minutes, seconds = divmod(seconds, 60)
-    hours, minutes = divmod(hours, 60)
+    hours, minutes = divmod(minutes, 60)
     days, hours = divmod(hours, 24)
     tmp = ((f"{days}d " if days else "") +
            (f"{hours}h " if hours else "") +
@@ -33,22 +37,34 @@ def time_formatter(milliseconds: int) -> str:
 
 async def progress_bar(current, total, status_type, message: Message, start_time, task_id, user, force_update=False):
     now = time.time()
-    diff = now - start_time
-    
-    # Auto update every 3 seconds or on explicit force_update / completion
-    if force_update or round(diff % 3) == 0 or current == total:
+    last_time = LAST_UPDATE_TIME.get(task_id, 0)
+
+    # Save to global cache for manual Refresh button queries
+    PROGRESS_CACHE[task_id] = {
+        "current": current,
+        "total": total,
+        "status_type": status_type,
+        "start_time": start_time
+    }
+
+    # Strict rate limit: Update every 3 seconds, or when forced/completed
+    if force_update or (now - last_time) >= 3.0 or current == total:
+        LAST_UPDATE_TIME[task_id] = now
+        diff = now - start_time
+        
         percentage = (current * 100 / total) if total > 0 else 0
         speed = current / diff if diff > 0 else 0
         elapsed_time = round(diff) * 1000
         time_to_completion = round((total - current) / speed) * 1000 if speed > 0 else 0
         
-        # Expanded 14-block bar for better visual readability
-        filled_length = int(14 * current // total) if total > 0 else 0
-        bar = '■' * filled_length + '□' * (14 - filled_length)
+        # 12-block visual progress bar
+        filled_length = int(12 * current // total) if total > 0 else 0
+        bar = '■' * filled_length + '□' * (12 - filled_length)
         
         eta_str = time_formatter(time_to_completion) if time_to_completion > 0 else "-"
         elapsed_str = time_formatter(elapsed_time)
-        user_name = f"{user.first_name}" if user.first_name else "User"
+        user_name = user.first_name if user and user.first_name else "User"
+        user_id = user.id if user else "N/A"
         
         text = (
             f"<b>📌 Task Phase: {status_type}</b>\n\n"
@@ -59,7 +75,7 @@ async def progress_bar(current, total, status_type, message: Message, start_time
             f"<b>⏰ Elapsed:</b> {elapsed_str}\n"
             f"<b>📤 Target:</b> Telegram\n"
             f"<b>🔧 Engine:</b> TDLib / Pyrogram\n"
-            f"<b>👤 User:</b> {user_name} (<code>{user.id}</code>)\n\n"
+            f"<b>👤 User:</b> {user_name} (<code>{user_id}</code>)\n\n"
             f"🛑 Cancel: /stop_{task_id}"
         )
         
@@ -71,6 +87,8 @@ async def progress_bar(current, total, status_type, message: Message, start_time
             await message.edit_text(text, reply_markup=refresh_btn)
         except MessageNotModified:
             pass
+        except FloodWait as e:
+            await asyncio.sleep(e.value)
         except Exception:
             pass
 
